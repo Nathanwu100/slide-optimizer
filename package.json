@@ -1,0 +1,13 @@
+{
+  "name": "lucid-slides",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Google Slides in, optimized Google Slides out.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

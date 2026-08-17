@@ -68,12 +68,6 @@
     background-size:cover;
     background-position:center 30%;
   }
-  /* Original source photo, converted from HEIC for browser compatibility. */
-  .hero-art{
-    background-image:url("hero-original.jpg");
-    filter:blur(2px);
-    transform:scale(1.008);
-  }
   .hero-overlay{
     position:absolute;
     inset:0;
@@ -204,82 +198,101 @@
     color:#dcedfa;
     margin:0 auto 34px auto;
   }
-  .upload-box{
+  .connect-panel{
     width:100%;
     max-width:760px;
     margin:0 auto;
+    background:rgba(255,255,255,0.08);
+    border:1.5px solid rgba(255,255,255,0.45);
+    padding:42px 36px;
+    text-align:left;
   }
-  .export-instructions{
-    font-family:var(--font);
+  .connect-panel h3{
+    color:#fff;
+    font-size:1.35rem;
+    margin-bottom:10px;
+  }
+  .connect-panel > p{
+    color:#dcedfa;
+    line-height:1.55;
+    margin-bottom:24px;
+  }
+  .connect-btn, .action-btn{
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    padding:15px 18px;
+    border-radius:0;
+    border:0;
     background:#fff;
     color:var(--ink);
-    border:1.5px solid rgba(255,255,255,0.65);
-    padding:18px 22px;
-    margin-bottom:16px;
-    border-radius:8px;
-    text-align:left;
-    font-size:0.9rem;
-    line-height:1.45;
-  }
-  .export-instructions-title{
     font-family:var(--font);
     font-size:1rem;
     font-weight:700;
-    margin-bottom:10px;
-  }
-  .export-instructions ol{
-    font-family:var(--font);
-    margin:0;
-    padding-left:20px;
-  }
-  .export-instructions li + li{margin-top:4px;}
-  .dropzone{
-    background:rgba(255,255,255,0.08);
-    border:2px dashed rgba(255,255,255,0.45);
-    border-radius:0;
-    padding:86px 42px;
     cursor:pointer;
-    transition:background 0.15s ease, border-color 0.15s ease;
   }
-  .dropzone.dragover{
-    background:rgba(255,255,255,0.18);
-    border-color:#fff;
+  .connect-btn:hover, .action-btn:hover{background:#f7f5f2;}
+  .connect-btn:disabled, .action-btn:disabled{cursor:not-allowed; opacity:0.58;}
+  .privacy-note{
+    color:#dcedfa;
+    font-size:0.84rem;
+    line-height:1.5;
+    margin-top:14px;
   }
-  .dropzone .dz-icon{font-size:2rem; margin-bottom:14px;}
-  .dropzone .dz-title{color:#fff; font-weight:700; font-size:1.1rem; margin-bottom:6px;}
-  .dropzone .dz-sub{color:#dcedfa; font-size:0.9rem;}
-  .dropzone input[type="file"]{display:none;}
-
-  #processingBox, #resultBox2{
+  .status-panel{
     display:none;
-    text-align:left;
     background:#fff;
-    border:1.5px solid rgba(255,255,255,0.5);
-    padding:26px 28px;
-    margin-top:20px;
+    border:1.5px solid rgba(255,255,255,0.55);
     color:var(--ink);
+    margin-top:20px;
+    padding:26px 28px;
   }
-  #processingBox .log-line{font-size:0.85rem; color:var(--muted); margin-bottom:4px;}
-  #resultBox2 .result-title{font-weight:700; font-size:1.05rem; margin-bottom:14px;}
-  #resultBox2 .download-btn{
+  .status-panel[aria-hidden="false"]{display:block;}
+  .status-heading{font-size:1.08rem; font-weight:700; margin-bottom:14px;}
+  .selected-deck{
+    border-left:3px solid var(--brand);
+    background:var(--bg-soft);
+    padding:14px 16px;
+    margin-bottom:18px;
+  }
+  .selected-deck strong{display:block; overflow-wrap:anywhere;}
+  .selected-deck span{display:block; color:var(--muted); font-size:0.84rem; margin-top:4px;}
+  .progress-list{list-style:none; margin:0; padding:0;}
+  .progress-list li{
+    color:var(--muted);
+    font-size:0.9rem;
+    line-height:1.45;
+    padding:8px 0 8px 26px;
+    position:relative;
+    border-top:1px solid #eceae6;
+  }
+  .progress-list li::before{content:"○"; position:absolute; left:2px; color:#8d8985;}
+  .progress-list li.active{color:var(--ink); font-weight:700;}
+  .progress-list li.active::before{content:"●"; color:var(--brand);}
+  .progress-list li.done::before{content:"✓"; color:#1b7a3d; font-weight:700;}
+  .result-link{
     display:inline-block;
     background:var(--brand);
     color:#fff;
     font-weight:700;
-    padding:12px 22px;
+    padding:13px 22px;
     text-decoration:none;
-    border:none;
-    cursor:pointer;
-    font-family:var(--font);
-    font-size:1rem;
-    margin-bottom:18px;
+    margin:4px 0 18px;
   }
-  #resultBox2 .next-step{font-size:0.85rem; color:var(--muted); margin-bottom:18px; line-height:1.5;}
-  #resultBox2 .slide-report{border-top:1px solid #eceae6; padding-top:14px;}
-  #resultBox2 .slide-report h4{font-size:0.9rem; margin-bottom:6px;}
-  #resultBox2 .slide-report ul{margin:0 0 14px 20px; font-size:0.85rem; color:var(--muted); line-height:1.5;}
-  #resultBox2 .tag-done{color:#1b7a3d; font-weight:700;}
-  #resultBox2 .tag-review{color:var(--brand); font-weight:700;}
+  .result-summary{color:var(--muted); font-size:0.9rem; line-height:1.55; margin-bottom:18px;}
+  .report-list{margin:0 0 0 20px; color:var(--muted); font-size:0.88rem; line-height:1.55;}
+  .report-list li + li{margin-top:6px;}
+  .unsupported-note{
+    border-left:3px solid #d98c22;
+    background:#fff8e8;
+    color:#60430f;
+    padding:14px 16px;
+    font-size:0.86rem;
+    line-height:1.5;
+    margin-top:18px;
+  }
   #errorBox{
     display:none;
     background:#fff0ef;
@@ -352,11 +365,8 @@
     .research-card h3,
     .research-card .citation{overflow-wrap:anywhere;}
 
-    .upload-box{max-width:none;}
-    .export-instructions{padding:18px 20px;}
-    .dropzone{padding:62px 24px;}
-    #processingBox, #resultBox2{padding:22px 20px;}
-    #resultBox2 .download-btn{text-align:center;}
+    .connect-panel{max-width:none; padding:32px 26px;}
+    .status-panel{padding:22px 20px;}
 
     #who-we-are p{max-width:none;}
     footer{padding:28px 24px;}
@@ -375,12 +385,9 @@
     section{padding:50px 16px;}
     h2{font-size:1.75rem;}
     .research-card{padding:22px 20px;}
-    .export-instructions{padding:16px 18px; font-size:0.88rem;}
-    .export-instructions-title{line-height:1.3;}
-    .dropzone{padding:54px 16px;}
-    .dropzone .dz-title{font-size:1rem;}
-    #processingBox, #resultBox2{padding:20px 16px;}
-    #resultBox2 .download-btn{display:block; width:100%;}
+    .connect-panel{padding:26px 18px;}
+    .status-panel{padding:20px 16px;}
+    .result-link{display:block; text-align:center;}
     footer{padding:24px 16px;}
   }
 </style>
@@ -436,34 +443,30 @@
 <section id="get-started">
   <div class="section-inner">
     <h2>Ready to simplify your slides?</h2>
-    <p class="lead">Everything runs right here in your browser — your file is never uploaded anywhere.</p>
-    <div class="upload-box">
-      <div class="export-instructions">
-        <div class="export-instructions-title">How to download your google slides presentation:</div>
-        <ol>
-          <li>Open the presentation in Google Slides.</li>
-          <li>Click File.</li>
-          <li>Select Download.</li>
-          <li>Choose Microsoft PowerPoint (.pptx).</li>
-          <li>Upload the downloaded .pptx file to the simplification tool.</li>
-        </ol>
-      </div>
-      <div class="dropzone" id="dropzone">
-        <div class="dz-icon">📄</div>
-        <div class="dz-title">Drag and drop your .pptx file here</div>
-        <div class="dz-sub">or click to browse</div>
-        <input type="file" id="fileInput" accept=".pptx">
+    <p class="lead">Connect Google Drive and choose one presentation. Lucid Slides creates a separate Google Slides copy before making any changes.</p>
+    <div class="connect-panel">
+      <h3>Choose a Google Slides presentation</h3>
+      <p>No uploads or conversions. Your original presentation is never edited.</p>
+      <button type="button" class="connect-btn" id="connectButton" disabled>
+        <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l5.7-5.7C34.6 6.5 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.3-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l5.7-5.7C34.6 6.5 29.6 4 24 4c-7.6 0-14.1 4.3-17.7 10.7z"/><path fill="#4CAF50" d="M24 44c5.5 0 10.5-2.1 14.3-5.6l-6.6-5.6C29.6 34.6 27 35.5 24 35.5c-5.3 0-9.8-3.5-11.3-8.2l-6.6 5.1C9.8 39.5 16.3 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.8l6.6 5.6C39.5 37.4 44 31.5 44 24c0-1.2-.1-2.3-.4-3.5z"/></svg>
+        Connect Google Drive
+      </button>
+      <p class="privacy-note">Lucid Slides requests only drive.file access. Slide text and short-lived rendered previews from the copy are sent securely to the optimization service; your Google access token never leaves this browser.</p>
+
+      <div class="status-panel" id="progressPanel" aria-hidden="true" aria-live="polite">
+        <div class="status-heading" id="progressHeading">Preparing Lucid Slides…</div>
+        <div class="selected-deck" id="selectedDeck" hidden></div>
+        <ol class="progress-list" id="progressList"></ol>
       </div>
 
-      <div id="processingBox"></div>
+      <div id="errorBox" role="alert"></div>
 
-      <div id="errorBox"></div>
-
-      <div id="resultBox2">
-        <div class="result-title">Done — here's your simplified deck.</div>
-        <a href="#" id="downloadLink" class="download-btn" download="simplified.pptx">Download Simplified.pptx</a>
-        <div class="next-step">To turn this back into a Google Slides file: upload it to Google Drive, then right-click it and choose "Open with → Google Slides" (or just double-click it in Drive — Drive offers to open .pptx files as Google Slides automatically).</div>
-        <div id="slideReportContainer"></div>
+      <div class="status-panel" id="resultPanel" aria-hidden="true">
+        <div class="status-heading">Your optimized Google Slides copy is ready.</div>
+        <p class="result-summary" id="resultSummary"></p>
+        <a class="result-link" id="resultLink" href="#" target="_blank" rel="noopener">Open optimized presentation →</a>
+        <ul class="report-list" id="reportList"></ul>
+        <div class="unsupported-note">Google's public Slides API cannot create animations or progressive bullet reveals. Lucid Slides reports rules 7 and 11 for manual review. It can add a conclusion headline for charts, but it cannot restyle an embedded chart's internal data series without broader Google Sheets access.</div>
       </div>
     </div>
   </div>
@@ -489,123 +492,6 @@
 </footer>
 
 
-<script src="jszip.min.js"></script>
-<script src="simplify-engine.js"></script>
-<script>
-(function () {
-  const dropzone = document.getElementById("dropzone");
-  const fileInput = document.getElementById("fileInput");
-  const processingBox = document.getElementById("processingBox");
-  const errorBox = document.getElementById("errorBox");
-  const resultBox = document.getElementById("resultBox2");
-  const downloadLink = document.getElementById("downloadLink");
-  const slideReportContainer = document.getElementById("slideReportContainer");
-
-  function resetPanels() {
-    processingBox.style.display = "none";
-    processingBox.innerHTML = "";
-    errorBox.style.display = "none";
-    errorBox.textContent = "";
-    resultBox.style.display = "none";
-    slideReportContainer.innerHTML = "";
-  }
-
-  function logLine(msg) {
-    processingBox.style.display = "block";
-    const line = document.createElement("div");
-    line.className = "log-line";
-    line.textContent = msg;
-    processingBox.appendChild(line);
-  }
-
-  function showError(msg) {
-    errorBox.style.display = "block";
-    errorBox.textContent = msg;
-  }
-
-  function renderReport(report) {
-    slideReportContainer.innerHTML = "";
-    if (!report.length) {
-      const p = document.createElement("p");
-      p.textContent = "No changes were needed.";
-      slideReportContainer.appendChild(p);
-      return;
-    }
-    report.forEach((sr) => {
-      const wrap = document.createElement("div");
-      wrap.className = "slide-report";
-      const h4 = document.createElement("h4");
-      h4.textContent = "Slide " + sr.slide;
-      wrap.appendChild(h4);
-      if (sr.changes.length) {
-        const ul = document.createElement("ul");
-        sr.changes.forEach((c) => {
-          const li = document.createElement("li");
-          li.innerHTML = '<span class="tag-done">Done:</span> ' + c;
-          ul.appendChild(li);
-        });
-        wrap.appendChild(ul);
-      }
-      if (sr.flags.length) {
-        const ul = document.createElement("ul");
-        sr.flags.forEach((c) => {
-          const li = document.createElement("li");
-          li.innerHTML = '<span class="tag-review">Review:</span> ' + c;
-          ul.appendChild(li);
-        });
-        wrap.appendChild(ul);
-      }
-      slideReportContainer.appendChild(wrap);
-    });
-  }
-
-  async function handleFile(file) {
-    resetPanels();
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".pptx")) {
-      showError("That's not a .pptx file. Export your Google Slides deck as PowerPoint (.pptx) first, then drop that file here.");
-      return;
-    }
-    try {
-      logLine("Reading " + file.name + "...");
-      const arrayBuffer = await file.arrayBuffer();
-      const { blob, report } = await simplifyPptx(arrayBuffer, logLine);
-
-      const url = URL.createObjectURL(blob);
-      downloadLink.href = url;
-      const outName = file.name.replace(/\.pptx$/i, "") + " (simplified).pptx";
-      downloadLink.setAttribute("download", outName);
-
-      resultBox.style.display = "block";
-      renderReport(report);
-      processingBox.style.display = "none";
-    } catch (err) {
-      console.error(err);
-      showError("Something went wrong reading that file: " + err.message + ". Make sure it's a valid, non-corrupted .pptx exported from Google Slides or PowerPoint.");
-      processingBox.style.display = "none";
-    }
-  }
-
-  dropzone.addEventListener("click", () => fileInput.click());
-  fileInput.addEventListener("change", (e) => handleFile(e.target.files[0]));
-
-  ["dragenter", "dragover"].forEach((evt) =>
-    dropzone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      dropzone.classList.add("dragover");
-    })
-  );
-  ["dragleave", "drop"].forEach((evt) =>
-    dropzone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      dropzone.classList.remove("dragover");
-    })
-  );
-  dropzone.addEventListener("drop", (e) => {
-    const file = e.dataTransfer.files[0];
-    handleFile(file);
-  });
-})();
-</script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
