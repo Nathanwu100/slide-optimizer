@@ -1,10 +1,12 @@
-/* Lucid Slides — read-only PPTX analysis engine.
+/* Lucid Slides — PPTX analysis and simplification engine.
  *
  * Safety contract:
- * - Reads ZIP entries without replacing or serializing any OOXML part.
- * - Never generates a PPTX, Blob, or modified package.
- * - Never applies threshold-based text, style, image, or structure edits.
- * - Produces review findings and validates optional AI proposals only.
+ * - The original file/bytes passed in are never mutated in place.
+ * - Only exact, single-paragraph text matches from validated AI proposals
+ *   are applied, and only to a freshly generated in-memory copy.
+ * - Threshold-based local findings (rules with no AI-approved rewrite) are
+ *   never auto-applied — only proposals with real, validated replacement
+ *   text are written into the generated copy.
  */
 
 const SLIDE_PATH = /^ppt\/slides\/slide(\d+)\.xml$/;
@@ -353,10 +355,100 @@ export function validateAiProposals(snapshot, proposals) {
   return validated;
 }
 
-export async function simplifyPptx() {
-  throw new Error(
-    "PowerPoint mutation is disabled. Lucid Slides now operates in analysis-only mode and does not create a modified PPTX.",
-  );
+function replaceParagraphText(paragraphXml, newText) {
+  const runs = [...paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)];
+  if (!runs.length) return null;
+  let result = paragraphXml;
+  let first = true;
+  for (const run of runs) {
+    const runXml = run[0];
+    const tMatch = runXml.match(/<a:t\b[^>]*>[\s\S]*?<\/a:t>/);
+    if (!tMatch) continue;
+    const replacementText = first ? escapeXmlText(newText) : "";
+    const newRunXml = runXml.replace(tMatch[0], `<a:t>${replacementText}</a:t>`);
+    result = result.replace(runXml, newRunXml);
+    first = false;
+  }
+  return result;
+}
+
+function escapeXmlText(value = "") {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Applies validated AI proposals to a fresh copy of the presentation and returns
+ * a downloadable Blob. The original file/bytes passed in are never mutated —
+ * a new in-memory zip package is built from them. Only exact, single-paragraph
+ * text matches are edited; anything that cannot be matched safely is skipped
+ * rather than guessed at. */
+export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = globalThis.JSZip) {
+  if (!zipLibrary?.loadAsync) throw new Error("The PowerPoint writer could not be loaded.");
+  if (!Array.isArray(proposals) || !proposals.length) {
+    return { blob: null, appliedCount: 0, skippedCount: 0 };
+  }
+
+  const zip = await zipLibrary.loadAsync(arrayBuffer);
+  const bySlide = new Map();
+  for (const proposal of proposals) {
+    if (!bySlide.has(proposal.slide)) bySlide.set(proposal.slide, []);
+    bySlide.get(proposal.slide).push(proposal);
+  }
+
+  let appliedCount = 0;
+  let skippedCount = 0;
+
+  for (const [slideNumber, edits] of bySlide) {
+    const path = `ppt/slides/slide${slideNumber}.xml`;
+    const file = zip.file(path);
+    if (!file) {
+      skippedCount += edits.length;
+      continue;
+    }
+    let xml = await file.async("string");
+
+    for (const edit of edits) {
+      const shapeMatches = [...xml.matchAll(/<p:sp\b[\s\S]*?<\/p:sp>/g)];
+      let shapeXml = null;
+      for (const match of shapeMatches) {
+        const nonVisual = match[0].match(/<p:cNvPr\b[^>]*>/)?.[0] || "";
+        const id = readAttribute(nonVisual, "id");
+        if (id === String(edit.objectId)) {
+          shapeXml = match[0];
+          break;
+        }
+      }
+      if (!shapeXml) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const paragraphs = [...shapeXml.matchAll(/<a:p\b[\s\S]*?<\/a:p>/g)];
+      let applied = false;
+      for (const paragraphMatch of paragraphs) {
+        const paragraphXml = paragraphMatch[0];
+        if (textFromXml(paragraphXml) !== edit.originalText) continue;
+        const newParagraphXml = replaceParagraphText(paragraphXml, edit.proposedText);
+        if (!newParagraphXml) continue;
+        const newShapeXml = shapeXml.replace(paragraphXml, newParagraphXml);
+        xml = xml.replace(shapeXml, newShapeXml);
+        shapeXml = newShapeXml;
+        applied = true;
+        break;
+      }
+      if (applied) appliedCount += 1;
+      else skippedCount += 1;
+    }
+
+    zip.file(path, xml);
+  }
+
+  if (!appliedCount) return { blob: null, appliedCount: 0, skippedCount };
+
+  const blob = await zip.generateAsync({
+    type: "blob",
+    mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  });
+  return { blob, appliedCount, skippedCount };
 }
 
 export { PLACEHOLDER_TEXT };

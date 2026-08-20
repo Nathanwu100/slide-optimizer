@@ -125,7 +125,7 @@
   }
 
   /* ---------- SECTIONS ---------- */
-  section{padding:90px 44px;}
+  section{padding:104px 44px;}
   .section-inner{max-width:1100px; margin:0 auto;}
   .eyebrow{
     font-family:var(--font);
@@ -144,6 +144,14 @@
     margin-bottom:16px;
     max-width:700px;
   }
+  h2::before{
+    content:"";
+    display:block;
+    width:64px;
+    height:3px;
+    background:var(--brand);
+    margin-bottom:20px;
+  }
   .lead{
     font-family:var(--font);
     color:var(--muted);
@@ -153,17 +161,21 @@
     line-height:1.6;
   }
 
-  #research{background:var(--bg-soft);}
+  #research{background:var(--bg-soft); border-top:1px solid #e6e1d8; border-bottom:1px solid #e6e1d8;}
   #research .research-grid{
     display:grid;
     grid-template-columns:repeat(3, 1fr);
     gap:24px;
   }
   .research-card{
-    padding:28px;
+    padding:30px 28px;
+    border:1px solid #e6e1d8;
     border-left:3px solid var(--brand);
     background:#ffffff;
+    box-shadow:0 4px 14px rgba(26,26,26,0.05);
+    transition:box-shadow 0.2s ease;
   }
+  .research-card:hover{box-shadow:0 8px 22px rgba(26,26,26,0.09);}
   .research-card h3{
     font-family:var(--font);
     font-size:1.05rem;
@@ -213,9 +225,10 @@
     background:#fff;
     color:var(--ink);
     border:1.5px solid rgba(255,255,255,0.65);
-    padding:18px 22px;
+    padding:20px 24px;
     margin-bottom:16px;
-    border-radius:8px;
+    border-radius:2px;
+    box-shadow:0 10px 26px rgba(0,0,0,0.14);
     text-align:left;
     font-size:0.9rem;
     line-height:1.45;
@@ -254,7 +267,8 @@
     text-align:left;
     background:#fff;
     border:1.5px solid rgba(255,255,255,0.5);
-    padding:26px 28px;
+    box-shadow:0 14px 34px rgba(0,0,0,0.16);
+    padding:28px 30px;
     margin-top:20px;
     color:var(--ink);
   }
@@ -277,13 +291,14 @@
   }
   .safety-notice{
     background:#fff;
-    border-left:4px solid #8a1f1a;
+    border:1px solid #e6cfcd;
     color:var(--ink);
     padding:18px 20px;
     margin:0 auto 18px;
     max-width:760px;
     text-align:left;
     line-height:1.5;
+    box-shadow:0 8px 22px rgba(0,0,0,0.1);
   }
   .safety-notice strong{display:block; margin-bottom:4px;}
   .mode-notice{background:#eef6fc; border-left:3px solid var(--brand); padding:12px 14px; margin-bottom:16px; line-height:1.45;}
@@ -331,15 +346,25 @@
     display:block;
     margin-top:40px;
     border:1.5px solid #e2ddd5;
+    box-shadow:0 14px 30px rgba(26,26,26,0.12);
   }
 
   footer{
     padding:32px 44px;
     text-align:center;
     color:var(--muted);
+    border-top:1px solid #e6e1d8;
     font-family:var(--font);
     font-size:0.9rem;
     border-top:1px solid #eceae6;
+  }
+
+  .footer-credit{
+    margin-top:8px;
+    font-size:0.8rem;
+    color:var(--muted);
+    opacity:0.8;
+    letter-spacing:0.01em;
   }
 
   @media (max-width:800px){
@@ -456,11 +481,11 @@
 
 <section id="get-started">
   <div class="section-inner">
-    <h2>Review your slides safely.</h2>
-    <p class="lead">Your PowerPoint file is read locally for analysis. Lucid Slides does not modify it or generate a replacement presentation.</p>
+    <h2>Simplify your slides safely.</h2>
+    <p class="lead">Your PowerPoint file is read locally for analysis. Lucid Slides never touches your original file — simplifications are written to a brand-new copy that only you can download.</p>
     <div class="safety-notice">
-      <strong>Analysis-only safety mode</strong>
-      Automatic PowerPoint editing is disabled. You will see review findings and, when configured, meaning-based proposals before any future application workflow is considered.
+      <strong>Your original file is never modified</strong>
+      When AI simplifications are available, they're applied to a fresh copy of your presentation. The file you uploaded stays exactly as it was.
     </div>
     <div class="upload-box">
       <div class="export-instructions">
@@ -475,8 +500,8 @@
       </div>
       <div class="dropzone" id="dropzone">
         <div class="dz-icon">📄</div>
-        <div class="dz-title">Drag and drop your .pptx file for safe analysis</div>
-        <div class="dz-sub">or click to browse — no modified PowerPoint will be generated</div>
+        <div class="dz-title">Drag and drop your .pptx file to simplify it</div>
+        <div class="dz-sub">or click to browse — your original file is never modified</div>
         <input type="file" id="fileInput" accept=".pptx">
       </div>
 
@@ -489,9 +514,9 @@
         <p class="result-summary" id="resultSummary"></p>
         <div class="mode-notice" id="modeNotice"></div>
         <ul class="inventory-list" id="inventoryList"></ul>
-        <a href="#" id="reportDownload" class="report-btn" download="lucid-slides-analysis.json">Download analysis report</a>
-        <div class="next-step">Approvals and rejections are recorded only in the report. No edit is applied and no PowerPoint copy is created until a targeted mutation workflow passes compatibility testing.</div>
-        <div id="proposalContainer"></div>
+        <a href="#" id="pptxDownload" class="report-btn" style="display:none;" download="simplified.pptx">Download simplified presentation</a>
+        <a href="#" id="reportDownload" class="report-btn" download="lucid-slides-summary.json">Download summary report</a>
+        <div class="next-step">Your original .pptx is never modified — simplifications are written to a brand-new copy that only you can download.</div>
       </div>
     </div>
   </div>
@@ -514,6 +539,7 @@
 
 <footer>
   Lucid Slides — built on ADHD attention research, for clearer presentations.
+  <div class="footer-credit">Created by Justin Cheng, Stephen Sheng, and Nathan Wu</div>
 </footer>
 
 
