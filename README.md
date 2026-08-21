@@ -1,6 +1,6 @@
 # Lucid Slides
 
-Lucid Slides is a browser-based, read-only PowerPoint analyzer for presentation clarity. The production safety mode does **not** modify or regenerate `.pptx` files.
+Lucid Slides is a browser-based PowerPoint clarity reviewer. It analyzes a local `.pptx`, shows meaning-based AI suggestions, and can create a new copy from explicitly approved, formatting-safe text changes.
 
 ## Safety status
 
@@ -14,25 +14,27 @@ The repaired workflow:
 4. Shows local review findings with explicit “AI analysis required” placeholders.
 5. Optionally sends only a reduced text-and-ID snapshot—not the PowerPoint file—to `/api/analyze`.
 6. Shows validated proposals for individual approval or rejection.
-7. Downloads a JSON analysis report only. It never downloads a modified presentation.
+7. Marks mixed-format, hyperlinked, field-generated, and manually line-broken paragraphs as manual-only.
+8. Creates a new `.pptx` only after the user approves at least one safe proposal.
+9. Revalidates approvals inside the writer and changes only an exact matching paragraph in an exact matching shape.
 
-No PowerPoint content, images, relationships, notes, charts, tables, hyperlinks, text runs, fonts, formatting, or slide structure is written by the application.
+The original file is never modified. Untouched PowerPoint package parts, including media, relationships, notes, charts, and tables, are preserved. The writer refuses unapproved changes and paragraphs whose formatting cannot be preserved conservatively.
 
-## Optional OpenAI analysis
+## Optional Groq analysis
 
-`api/analyze.js` is a Vercel Function that keeps `OPENAI_API_KEY` server-side, sends requests with `store: false`, requires structured output, and revalidates every proposal against exact slide and object IDs and source text. Google or PowerPoint credentials are not required for local analysis.
+`api/analyze.js` is a Vercel Function that keeps `GROQ_API_KEY` server-side, uses Groq structured output, and revalidates every proposal against an exact slide, object ID, and complete source paragraph. The default model is `openai/gpt-oss-120b` because the Llama models previously used by this branch were retired for free and developer accounts on August 16, 2026.
 
-If `OPENAI_API_KEY` is absent, the endpoint returns a clearly labeled `analysis-only` response and the browser continues with local findings. Never put an API key in frontend code or ask a user to paste one into the site.
+If `GROQ_API_KEY` is absent, the endpoint returns a clearly labeled `analysis-only` response and the browser continues with local findings. Never put an API key in frontend code or ask a user to paste one into the site.
 
 Environment variables are documented in `.env.example`.
 
 ## Run locally
 
 ```bash
-python3 -m http.server 8000
+node local-server.js
 ```
 
-Open `http://localhost:8000`. The static server is only for local development; users access the deployed website normally.
+Open `http://localhost:5173`. The local server is only for development; users access the deployed website normally.
 
 ## Tests
 
@@ -46,8 +48,8 @@ Run the full supplied-deck regression on this Mac with:
 LUCID_TEST_PPTX="/Users/nathan/Desktop/slide for test.pptx" npm test
 ```
 
-The real-deck test confirms 22 slides are inspected, source bytes and every raw slide hash remain unchanged, and no PowerPoint output is created. Because analysis-only mode produces no `.pptx`, output-package and PowerPoint repair-warning checks are intentionally not applicable; the validated input remains the only presentation file.
+The real-deck regression confirms 22 slides are inspected and the source bytes remain unchanged. Writer tests also confirm that only approved uniform-format text is replaced while media, relationships, notes, charts, and hyperlinks remain byte-identical.
 
 ## Known platform limitation
 
-Reliable in-browser mutation of arbitrary PowerPoint packages has not been established. In particular, broad DOM parsing and serialization can damage compatibility even when media and relationships remain in the ZIP. Targeted application of approved edits must remain disabled until a future implementation can preserve untouched ZIP entries byte-for-byte and pass visual and PowerPoint-compatible open/repair testing on representative decks.
+Arbitrary PowerPoint editing remains intentionally unsupported. Lucid Slides does not resize objects, delete elements, change charts, alter animations, or rewrite mixed-format/hyperlinked paragraphs. Those cases are reported for manual PowerPoint review.

@@ -48,6 +48,39 @@ function boldWordCount(paragraphXml = "") {
   return count;
 }
 
+function normalizedRunProperties(runXml = "") {
+  const match = runXml.match(/<a:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/a:rPr>)/);
+  if (!match || /^<a:rPr\b[^>]*\/>$/.test(match[0]) && !/\b(?:b|i|u|strike|sz|baseline|kumimoji|cap|spc|normalizeH|noProof)\s*=/.test(match[0])) {
+    return "";
+  }
+  return match[0].replace(/\s+/g, " ").trim();
+}
+
+export function assessParagraphEditSafety(paragraphXml = "") {
+  if (/<a:hlink(?:Click|MouseOver)\b/.test(paragraphXml)) {
+    return { safe: false, reason: "Hyperlinked text requires a manual PowerPoint edit." };
+  }
+  if (/<a:fld\b/.test(paragraphXml)) {
+    return { safe: false, reason: "Field-generated text requires a manual PowerPoint edit." };
+  }
+  if (/<a:br\b/.test(paragraphXml)) {
+    return { safe: false, reason: "Text containing a manual line break requires a manual PowerPoint edit." };
+  }
+
+  const runs = [...paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)]
+    .map((match) => match[0])
+    .filter((runXml) => /<a:t\b/.test(runXml));
+  if (!runs.length) {
+    return { safe: false, reason: "No editable text run was found." };
+  }
+
+  const formattingSignatures = new Set(runs.map(normalizedRunProperties));
+  if (formattingSignatures.size > 1) {
+    return { safe: false, reason: "Mixed formatting is preserved by leaving this paragraph for manual review." };
+  }
+  return { safe: true, reason: "The paragraph uses one uniform text style that can be preserved exactly." };
+}
+
 function elementType(elementXml, tagName) {
   if (tagName === "pic") return "image";
   if (/<a:tbl\b/.test(elementXml)) return "table";
@@ -79,6 +112,7 @@ export function analyzeSlideXml(xml, slideNumber) {
       const text = textFromXml(paragraphXml);
       if (!text.trim()) continue;
       const words = wordCount(text);
+      const editSafety = assessParagraphEditSafety(paragraphXml);
       paragraphs.push({
         index: paragraphIndex,
         text,
@@ -86,6 +120,8 @@ export function analyzeSlideXml(xml, slideNumber) {
         boldWordCount: boldWordCount(paragraphXml),
         hasHyperlink: /<a:hlinkClick\b/.test(paragraphXml),
         isBullet: /<a:bu(?:Char|AutoNum|Blip)\b/.test(paragraphXml),
+        safeToAutoApply: editSafety.safe,
+        safetyReason: editSafety.reason,
       });
       paragraphIndex += 1;
     }
@@ -297,8 +333,8 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     slides,
     findings: buildLocalFindings(slides),
     limitations: [
-      "No PowerPoint content, formatting, relationships, media, notes, charts, tables, hyperlinks, or structure was changed.",
-      "No modified PowerPoint file was generated because reliable browser-side mutation has not been proven safe.",
+      "No PowerPoint content, formatting, relationships, media, notes, charts, tables, hyperlinks, or structure was changed during analysis.",
+      "A new copy can contain only explicitly approved replacements in uniformly formatted, non-hyperlinked paragraphs.",
       "Rules 7 and 11 require manual animation authoring in PowerPoint-compatible software.",
     ],
   };
@@ -314,6 +350,11 @@ export function createAnalysisSnapshot(analysis) {
         name: element.name.slice(0, 160),
         type: element.type,
         text: element.text.slice(0, 6000),
+        paragraphs: element.paragraphs.slice(0, 300).map((paragraph) => ({
+          text: paragraph.text.slice(0, 1200),
+          safeToAutoApply: paragraph.safeToAutoApply,
+          safetyReason: paragraph.safetyReason.slice(0, 240),
+        })),
       })),
     })),
   };
@@ -334,7 +375,8 @@ export function validateAiProposals(snapshot, proposals) {
     const proposedText = String(proposal.proposedText || "").trim();
     const explanation = String(proposal.explanation || "").trim();
     const rule = Number(proposal.rule);
-    if (!element || !originalText || !element.text.includes(originalText)) continue;
+    const paragraph = element?.paragraphs?.find((candidate) => candidate.text === originalText);
+    if (!element || !paragraph || !originalText) continue;
     if (!proposedText || proposedText === originalText || proposedText.length > 1200) continue;
     if (!explanation || explanation.length > 1000 || !Number.isInteger(rule) || rule < 1 || rule > 12) continue;
     validated.push({
@@ -347,15 +389,17 @@ export function validateAiProposals(snapshot, proposals) {
       proposedText,
       rule,
       explanation,
-      actionable: true,
-      source: "openai-analysis",
-      decision: "pending",
+      actionable: Boolean(paragraph.safeToAutoApply),
+      source: "ai-analysis",
+      decision: paragraph.safeToAutoApply ? "pending" : "manual-only",
+      safetyReason: paragraph.safetyReason || "This proposal requires a manual PowerPoint edit.",
     });
   }
   return validated;
 }
 
-function replaceParagraphText(paragraphXml, newText) {
+function replaceUniformParagraphText(paragraphXml, newText) {
+  if (!assessParagraphEditSafety(paragraphXml).safe) return null;
   const runs = [...paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)];
   if (!runs.length) return null;
   let result = paragraphXml;
@@ -365,11 +409,21 @@ function replaceParagraphText(paragraphXml, newText) {
     const tMatch = runXml.match(/<a:t\b[^>]*>[\s\S]*?<\/a:t>/);
     if (!tMatch) continue;
     const replacementText = first ? escapeXmlText(newText) : "";
-    const newRunXml = runXml.replace(tMatch[0], `<a:t>${replacementText}</a:t>`);
+    const openingTag = tMatch[0].match(/^<a:t\b[^>]*>/)?.[0] || "<a:t>";
+    let safeOpeningTag = openingTag;
+    if (first && (/^\s|\s$/.test(newText)) && !/\bxml:space=/.test(safeOpeningTag)) {
+      safeOpeningTag = safeOpeningTag.replace(/>$/, ' xml:space="preserve">');
+    }
+    const newRunXml = runXml.replace(tMatch[0], `${safeOpeningTag}${replacementText}</a:t>`);
     result = result.replace(runXml, newRunXml);
     first = false;
   }
   return result;
+}
+
+export function selectApprovedProposals(proposals) {
+  if (!Array.isArray(proposals)) return [];
+  return proposals.filter((proposal) => proposal?.actionable !== false && proposal?.decision === "approved");
 }
 
 function escapeXmlText(value = "") {
@@ -384,24 +438,36 @@ function escapeXmlText(value = "") {
 export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = globalThis.JSZip) {
   if (!zipLibrary?.loadAsync) throw new Error("The PowerPoint writer could not be loaded.");
   if (!Array.isArray(proposals) || !proposals.length) {
-    return { blob: null, appliedCount: 0, skippedCount: 0 };
+    return { blob: null, appliedCount: 0, skippedCount: 0, results: [] };
   }
 
-  const zip = await zipLibrary.loadAsync(arrayBuffer);
+  const sourceBytes = arrayBuffer instanceof Uint8Array
+    ? arrayBuffer.slice()
+    : new Uint8Array(arrayBuffer.slice(0));
+  const approved = selectApprovedProposals(proposals);
+  const results = proposals
+    .filter((proposal) => !approved.includes(proposal))
+    .map((proposal) => ({ id: proposal.id || null, status: "skipped", reason: "not-approved" }));
+  if (!approved.length) {
+    return { blob: null, appliedCount: 0, skippedCount: proposals.length, results };
+  }
+
+  const zip = await zipLibrary.loadAsync(sourceBytes);
   const bySlide = new Map();
-  for (const proposal of proposals) {
+  for (const proposal of approved) {
     if (!bySlide.has(proposal.slide)) bySlide.set(proposal.slide, []);
     bySlide.get(proposal.slide).push(proposal);
   }
 
   let appliedCount = 0;
-  let skippedCount = 0;
+  let skippedCount = proposals.length - approved.length;
 
   for (const [slideNumber, edits] of bySlide) {
     const path = `ppt/slides/slide${slideNumber}.xml`;
     const file = zip.file(path);
     if (!file) {
       skippedCount += edits.length;
+      results.push(...edits.map((edit) => ({ id: edit.id || null, status: "skipped", reason: "slide-not-found" })));
       continue;
     }
     let xml = await file.async("string");
@@ -419,6 +485,7 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
       }
       if (!shapeXml) {
         skippedCount += 1;
+        results.push({ id: edit.id || null, status: "skipped", reason: "shape-not-found" });
         continue;
       }
 
@@ -427,28 +494,39 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
       for (const paragraphMatch of paragraphs) {
         const paragraphXml = paragraphMatch[0];
         if (textFromXml(paragraphXml) !== edit.originalText) continue;
-        const newParagraphXml = replaceParagraphText(paragraphXml, edit.proposedText);
+        const safety = assessParagraphEditSafety(paragraphXml);
+        if (!safety.safe) {
+          results.push({ id: edit.id || null, status: "skipped", reason: "protected-formatting", message: safety.reason });
+          break;
+        }
+        const newParagraphXml = replaceUniformParagraphText(paragraphXml, edit.proposedText);
         if (!newParagraphXml) continue;
         const newShapeXml = shapeXml.replace(paragraphXml, newParagraphXml);
         xml = xml.replace(shapeXml, newShapeXml);
         shapeXml = newShapeXml;
         applied = true;
+        results.push({ id: edit.id || null, status: "applied", reason: "approved-uniform-formatting" });
         break;
       }
       if (applied) appliedCount += 1;
-      else skippedCount += 1;
+      else {
+        skippedCount += 1;
+        if (!results.some((result) => result.id === (edit.id || null) && result.status === "skipped")) {
+          results.push({ id: edit.id || null, status: "skipped", reason: "exact-paragraph-not-found" });
+        }
+      }
     }
 
     zip.file(path, xml);
   }
 
-  if (!appliedCount) return { blob: null, appliedCount: 0, skippedCount };
+  if (!appliedCount) return { blob: null, appliedCount: 0, skippedCount, results };
 
   const blob = await zip.generateAsync({
     type: "blob",
     mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   });
-  return { blob, appliedCount, skippedCount };
+  return { blob, appliedCount, skippedCount, results };
 }
 
 export { PLACEHOLDER_TEXT };

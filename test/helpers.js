@@ -12,6 +12,7 @@ export async function loadJsZip() {
     ArrayBuffer,
     TextEncoder,
     TextDecoder,
+    Blob,
     setTimeout,
     clearTimeout,
     setImmediate,

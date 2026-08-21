@@ -15,12 +15,18 @@ function mockResponse() {
 
 const snapshot = {
   sourceHash: "abc",
-  slides: [{ slide: 1, elements: [{ objectId: "2", name: "Body", type: "text", text: "Original exact text." }] }],
+  slides: [{ slide: 1, elements: [{
+    objectId: "2",
+    name: "Body",
+    type: "text",
+    text: "Original exact text.",
+    paragraphs: [{ text: "Original exact text.", safeToAutoApply: true }],
+  }] }],
 };
 
-test("missing OpenAI credentials returns explicit analysis-only mode", async () => {
-  const previousKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+test("missing Groq credentials returns explicit analysis-only mode", async () => {
+  const previousKey = process.env.GROQ_API_KEY;
+  delete process.env.GROQ_API_KEY;
   const request = {
     method: "POST",
     headers: { "x-lucid-request": "analysis-v1" },
@@ -32,7 +38,27 @@ test("missing OpenAI credentials returns explicit analysis-only mode", async () 
   assert.equal(response.statusCode, 503);
   assert.equal(response.payload.mode, "analysis-only");
   assert.deepEqual(response.payload.proposals, []);
-  if (previousKey) process.env.OPENAI_API_KEY = previousKey;
+  if (previousKey) process.env.GROQ_API_KEY = previousKey;
+});
+
+test("cross-origin requests are rejected when no explicit origin is configured", async () => {
+  const previousOrigin = process.env.ALLOWED_ORIGIN;
+  delete process.env.ALLOWED_ORIGIN;
+  const request = {
+    method: "POST",
+    headers: {
+      "x-lucid-request": "analysis-v1",
+      origin: "https://untrusted.example",
+      host: "slide-optimizer.vercel.app",
+      "x-forwarded-proto": "https",
+    },
+    body: { presentation: snapshot },
+    socket: { remoteAddress: "127.0.0.3" },
+  };
+  const response = mockResponse();
+  await handler(request, response);
+  assert.equal(response.statusCode, 403);
+  if (previousOrigin) process.env.ALLOWED_ORIGIN = previousOrigin;
 });
 
 test("snapshot validation strips unknown fields and caps content", () => {

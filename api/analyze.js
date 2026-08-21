@@ -1,4 +1,4 @@
-import { validateProposalResponse, validateSnapshot } from "../lib/proposals.js";
+import { proposalSchema, validateProposalResponse, validateSnapshot } from "../lib/proposals.js";
  
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 12;
@@ -13,8 +13,13 @@ function setSecurityHeaders(response) {
  
 function allowOrigin(request) {
   const configured = process.env.ALLOWED_ORIGIN;
-  if (!configured) return true;
-  return request.headers.origin === configured;
+  const requestOrigin = request.headers.origin;
+  if (configured) return requestOrigin === configured;
+  if (!requestOrigin) return true;
+  const directProtocol = request.socket?.encrypted ? "https" : "http";
+  const protocol = String(request.headers["x-forwarded-proto"] || directProtocol).split(",")[0].trim();
+  const host = String(request.headers["x-forwarded-host"] || request.headers.host || "").split(",")[0].trim();
+  return Boolean(host) && requestOrigin === `${protocol}://${host}`;
 }
  
 function rateLimited(request) {
@@ -63,7 +68,7 @@ export default async function handler(request, response) {
  
   const prompt = [
     "Analyze this presentation snapshot and propose optional edits; never claim an edit was applied.",
-    "Every proposal must identify an existing slide and objectId and quote exact originalText from that element.",
+    "Every proposal must identify an existing slide and objectId and set originalText to one complete paragraph copied exactly from that element.",
     "Use semantic judgment. Do not shorten text, bold opening words, resize content, or remove elements merely because of a numeric threshold.",
     "Do not propose deleting logos, icons, diagrams, charts, tables, citations, hyperlinks, or images without clear meaning-based evidence.",
     "Focus on rules 1-6, 8-10, and 12. Rules 7 and 11 require manual animation work and must not be proposed as automatic edits.",
@@ -86,12 +91,13 @@ export default async function handler(request, response) {
   // rough prompt-token estimate (~4 chars/token) instead of a flat constant.
   const TPM_BUDGET = 7500; // stays under the 8000 TPM limit seen on smaller Groq tiers, with margin
   const estimatedPromptTokens = Math.ceil(prompt.length / 4);
-  const maxCompletionTokens = Math.max(1200, Math.min(6000, TPM_BUDGET - estimatedPromptTokens));
-  if (estimatedPromptTokens >= TPM_BUDGET) {
+  const remainingCompletionTokens = TPM_BUDGET - estimatedPromptTokens;
+  if (remainingCompletionTokens < 1200) {
     return response.status(413).json({
       error: "This presentation is too large for AI analysis on the current Groq plan/model. Try a smaller deck, or raise the account's token limit.",
     });
   }
+  const maxCompletionTokens = Math.min(6000, remainingCompletionTokens);
 
   try {
     const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -101,10 +107,18 @@ export default async function handler(request, response) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
+        model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
         temperature: 0.2,
         max_tokens: maxCompletionTokens,
-        response_format: { type: "json_object" },
+        reasoning_effort: "low",
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "lucid_slide_proposals",
+            strict: true,
+            schema: proposalSchema(),
+          },
+        },
         messages: [
           {
             role: "system",

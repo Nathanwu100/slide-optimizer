@@ -313,6 +313,10 @@
   .proposal-controls{display:flex; flex-wrap:wrap; gap:10px; align-items:center;}
   .proposal-controls button{font:700 0.88rem var(--font); padding:9px 14px; border:1.5px solid var(--brand); background:#fff; color:var(--brand-dark); cursor:pointer; border-radius:0;}
   .proposal-controls button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+  .proposal-controls button:disabled, .report-btn:disabled{cursor:not-allowed; opacity:0.55;}
+  .application-status{font-size:0.83rem; font-weight:700;}
+  .application-status.applied{color:#236b3d;}
+  .application-status.skipped{color:#8a1f1a;}
   .not-actionable{font-size:0.83rem; color:var(--muted);}
   .empty-findings{color:var(--muted); line-height:1.5; padding:16px 0;}
   #errorBox{
@@ -482,10 +486,10 @@
 <section id="get-started">
   <div class="section-inner">
     <h2>Simplify your slides safely.</h2>
-    <p class="lead">Your PowerPoint file is read locally for analysis. Lucid Slides never touches your original file — simplifications are written to a brand-new copy that only you can download.</p>
+    <p class="lead">Your PowerPoint file is read locally for analysis. Review each AI suggestion, approve only the changes you want, and download a new copy.</p>
     <div class="safety-notice">
-      <strong>Your original file is never modified</strong>
-      When AI simplifications are available, they're applied to a fresh copy of your presentation. The file you uploaded stays exactly as it was.
+      <strong>No automatic edits</strong>
+      Lucid Slides never changes your original. It only creates a new copy after you explicitly approve formatting-safe suggestions. Mixed formatting and hyperlinks are left for manual review.
     </div>
     <div class="upload-box">
       <div class="export-instructions">
@@ -501,7 +505,7 @@
       <div class="dropzone" id="dropzone">
         <div class="dz-icon">📄</div>
         <div class="dz-title">Drag and drop your .pptx file to simplify it</div>
-        <div class="dz-sub">or click to browse — your original file is never modified</div>
+        <div class="dz-sub">or click to browse — nothing is applied without your approval</div>
         <input type="file" id="fileInput" accept=".pptx">
       </div>
 
@@ -514,9 +518,11 @@
         <p class="result-summary" id="resultSummary"></p>
         <div class="mode-notice" id="modeNotice"></div>
         <ul class="inventory-list" id="inventoryList"></ul>
+        <button type="button" id="applyApprovedButton" class="report-btn" style="display:none;" disabled>Approve at least one change to create a copy</button>
         <a href="#" id="pptxDownload" class="report-btn" style="display:none;" download="simplified.pptx">Download simplified presentation</a>
         <a href="#" id="reportDownload" class="report-btn" download="lucid-slides-summary.json">Download summary report</a>
-        <div class="next-step">Your original .pptx is never modified — simplifications are written to a brand-new copy that only you can download.</div>
+        <div class="next-step">Review every suggestion. A new PowerPoint is created only from explicitly approved, formatting-safe changes.</div>
+        <div id="proposalContainer"></div>
       </div>
     </div>
   </div>
