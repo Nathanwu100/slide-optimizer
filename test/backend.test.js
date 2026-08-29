@@ -67,7 +67,7 @@ test("OpenAI structured output is validated before proposals are returned", asyn
               text: JSON.stringify({ proposals: [
                 { slide: 1, objectId: "2", originalText: "Original exact text.", proposedText: "A clearer version.", rule: 3, explanation: "Improves clarity." },
                 { slide: 1, objectId: "99", originalText: "Invented source", proposedText: "Invalid", rule: 3, explanation: "Invalid." },
-              ] }),
+              ], emphasis: [] }),
             }],
           }],
         };
@@ -130,4 +130,37 @@ test("server rejects model proposals for invented elements or text", () => {
     { slide: 1, objectId: "99", originalText: "Original exact text.", proposedText: "Invalid", rule: 3, explanation: "Invalid." },
   ] });
   assert.equal(proposals.length, 1);
+});
+
+test("server converts exact semantic emphasis phrases into validated character ranges", () => {
+  const validatedSnapshot = validateSnapshot({
+    ...snapshot,
+    slides: [{ slide: 1, elements: [{
+      ...snapshot.slides[0].elements[0],
+      type: "text",
+      text: "The retina processes visual information before sending signals to the brain.",
+      paragraphs: [{
+        text: "The retina processes visual information before sending signals to the brain.",
+        safeToAutoApply: true,
+        safeToEmphasize: true,
+      }],
+    }] }],
+  });
+  const proposals = validateProposalResponse(validatedSnapshot, {
+    proposals: [],
+    emphasis: [{
+      slide: 1,
+      objectId: "2",
+      originalText: "The retina processes visual information before sending signals to the brain.",
+      phrases: ["visual information", "the brain"],
+      rule: 4,
+      explanation: "Highlights the process and outcome.",
+    }],
+  });
+  assert.equal(proposals.length, 1);
+  assert.equal(proposals[0].action, "emphasize");
+  assert.deepEqual(proposals[0].boldRanges, [
+    { start: 21, end: 39, text: "visual information" },
+    { start: 66, end: 75, text: "the brain" },
+  ]);
 });

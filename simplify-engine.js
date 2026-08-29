@@ -81,6 +81,22 @@ export function assessParagraphEditSafety(paragraphXml = "") {
   return { safe: true, reason: "The paragraph uses one uniform text style that can be preserved exactly." };
 }
 
+export function assessParagraphEmphasisSafety(paragraphXml = "") {
+  const editSafety = assessParagraphEditSafety(paragraphXml);
+  if (!editSafety.safe) return editSafety;
+  const runs = [...paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)]
+    .map((match) => match[0])
+    .filter((runXml) => /<a:t\b/.test(runXml));
+  if (runs.length !== 1) {
+    return { safe: false, reason: "Text split across multiple PowerPoint runs is left for manual emphasis." };
+  }
+  const properties = runs[0].match(/<a:rPr\b[^>]*>/)?.[0] || "";
+  if (/\bb="(?:1|true)"/.test(properties)) {
+    return { safe: false, reason: "Text that is already bold is left unchanged." };
+  }
+  return { safe: true, reason: "This plain, single-run paragraph can be emphasized without changing its wording." };
+}
+
 function elementType(elementXml, tagName) {
   if (tagName === "pic") return "image";
   if (/<a:tbl\b/.test(elementXml)) return "table";
@@ -113,6 +129,7 @@ export function analyzeSlideXml(xml, slideNumber) {
       if (!text.trim()) continue;
       const words = wordCount(text);
       const editSafety = assessParagraphEditSafety(paragraphXml);
+      const emphasisSafety = assessParagraphEmphasisSafety(paragraphXml);
       paragraphs.push({
         index: paragraphIndex,
         text,
@@ -122,6 +139,8 @@ export function analyzeSlideXml(xml, slideNumber) {
         isBullet: /<a:bu(?:Char|AutoNum|Blip)\b/.test(paragraphXml),
         safeToAutoApply: editSafety.safe,
         safetyReason: editSafety.reason,
+        safeToEmphasize: emphasisSafety.safe,
+        emphasisSafetyReason: emphasisSafety.reason,
       });
       paragraphIndex += 1;
     }
@@ -334,7 +353,7 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     findings: buildLocalFindings(slides),
     limitations: [
       "No PowerPoint content, formatting, relationships, media, notes, charts, tables, hyperlinks, or structure was changed during analysis.",
-      "A new copy can contain only explicitly approved replacements in uniformly formatted, non-hyperlinked paragraphs.",
+      "A new copy can contain only explicitly approved rewrites or restrained emphasis in formatting-safe paragraphs.",
       "Rules 7 and 11 require manual animation authoring in PowerPoint-compatible software.",
     ],
   };
@@ -354,6 +373,8 @@ export function createAnalysisSnapshot(analysis) {
           text: paragraph.text.slice(0, 1200),
           safeToAutoApply: paragraph.safeToAutoApply,
           safetyReason: paragraph.safetyReason.slice(0, 240),
+          safeToEmphasize: paragraph.safeToEmphasize,
+          emphasisSafetyReason: paragraph.emphasisSafetyReason.slice(0, 240),
         })),
       })),
     })),
@@ -367,35 +388,71 @@ export function validateAiProposals(snapshot, proposals) {
   }
   if (!Array.isArray(proposals)) return [];
   const validated = [];
+  const seenParagraphs = new Set();
   for (const proposal of proposals.slice(0, 200)) {
     const slide = Number(proposal.slide);
     const objectId = String(proposal.objectId || "");
     const element = lookup.get(`${slide}:${objectId}`);
     const originalText = String(proposal.originalText || "");
+    const action = proposal.action === "emphasize" ? "emphasize" : "rewrite";
     const proposedText = String(proposal.proposedText || "").trim();
     const explanation = String(proposal.explanation || "").trim();
     const rule = Number(proposal.rule);
     const paragraph = element?.paragraphs?.find((candidate) => candidate.text === originalText);
+    const paragraphKey = `${slide}:${objectId}:${originalText}`;
     if (!element || !paragraph || !originalText) continue;
-    if (!proposedText || proposedText === originalText || proposedText.length > 1200) continue;
     if (!explanation || explanation.length > 1000 || !Number.isInteger(rule) || rule < 1 || rule > 12) continue;
+    if (seenParagraphs.has(paragraphKey)) continue;
+    let boldRanges = null;
+    let actionable = Boolean(paragraph.safeToAutoApply);
+    let safetyReason = paragraph.safetyReason || "This proposal requires a manual PowerPoint edit.";
+    if (action === "rewrite") {
+      if (!proposedText || proposedText === originalText || proposedText.length > 1200) continue;
+    } else {
+      if (element.type === "title" || proposedText !== originalText) continue;
+      boldRanges = normalizeBoldRanges(originalText, proposal.boldRanges);
+      if (!boldRanges) continue;
+      actionable = Boolean(paragraph.safeToEmphasize);
+      safetyReason = paragraph.emphasisSafetyReason || "This emphasis requires a manual PowerPoint edit.";
+    }
+    seenParagraphs.add(paragraphKey);
     validated.push({
-      id: `ai-slide-${slide}-element-${objectId}-rule-${rule}-${validated.length + 1}`,
+      id: `ai-${action}-slide-${slide}-element-${objectId}-rule-${rule}-${validated.length + 1}`,
+      action,
       slide,
       objectId,
       elementName: element.name,
       elementType: element.type,
       originalText,
       proposedText,
+      boldRanges,
       rule,
       explanation,
-      actionable: Boolean(paragraph.safeToAutoApply),
+      actionable,
       source: "ai-analysis",
-      decision: paragraph.safeToAutoApply ? "pending" : "manual-only",
-      safetyReason: paragraph.safetyReason || "This proposal requires a manual PowerPoint edit.",
+      decision: actionable ? "pending" : "manual-only",
+      safetyReason,
     });
   }
   return validated;
+}
+
+function normalizeBoldRanges(text, ranges) {
+  if (!Array.isArray(ranges) || ranges.length < 1 || ranges.length > 3) return null;
+  const normalized = ranges.map((range) => ({
+    start: Number(range?.start),
+    end: Number(range?.end),
+    text: String(range?.text || ""),
+  })).sort((a, b) => a.start - b.start);
+  for (let index = 0; index < normalized.length; index += 1) {
+    const range = normalized[index];
+    if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end <= range.start || range.end > text.length) return null;
+    if (text.slice(range.start, range.end) !== range.text || !range.text.trim() || range.text.split(/\s+/).length > 8) return null;
+    if (index > 0 && range.start < normalized[index - 1].end) return null;
+  }
+  const selected = normalized.reduce((sum, range) => sum + range.end - range.start, 0);
+  if (selected >= text.trim().length || selected / text.length > 0.4) return null;
+  return normalized;
 }
 
 function replaceUniformParagraphText(paragraphXml, newText) {
@@ -419,6 +476,47 @@ function replaceUniformParagraphText(paragraphXml, newText) {
     first = false;
   }
   return result;
+}
+
+function replaceRunText(runXml, text) {
+  const textMatch = runXml.match(/<a:t\b[^>]*>[\s\S]*?<\/a:t>/);
+  if (!textMatch) return null;
+  let openingTag = textMatch[0].match(/^<a:t\b[^>]*>/)?.[0] || "<a:t>";
+  if ((/^\s|\s$/.test(text)) && !/\bxml:space=/.test(openingTag)) {
+    openingTag = openingTag.replace(/>$/, ' xml:space="preserve">');
+  }
+  return runXml.replace(textMatch[0], `${openingTag}${escapeXmlText(text)}</a:t>`);
+}
+
+function addBoldToRun(runXml) {
+  const properties = runXml.match(/<a:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/a:rPr>)/)?.[0];
+  if (!properties) return runXml.replace(/^<a:r\b[^>]*>/, (opening) => `${opening}<a:rPr b="1"/>`);
+  if (/\bb="[^"]*"/.test(properties)) {
+    return runXml.replace(properties, properties.replace(/\bb="[^"]*"/, 'b="1"'));
+  }
+  return runXml.replace(properties, properties.replace(/^<a:rPr\b/, '<a:rPr b="1"'));
+}
+
+function replaceUniformParagraphEmphasis(paragraphXml, ranges) {
+  if (!assessParagraphEmphasisSafety(paragraphXml).safe) return null;
+  const run = paragraphXml.match(/<a:r\b[\s\S]*?<\/a:r>/)?.[0];
+  const originalText = textFromXml(run || "");
+  const normalized = normalizeBoldRanges(originalText, ranges);
+  if (!run || !normalized) return null;
+  const segments = [];
+  let cursor = 0;
+  for (const range of normalized) {
+    if (range.start > cursor) segments.push({ text: originalText.slice(cursor, range.start), bold: false });
+    segments.push({ text: originalText.slice(range.start, range.end), bold: true });
+    cursor = range.end;
+  }
+  if (cursor < originalText.length) segments.push({ text: originalText.slice(cursor), bold: false });
+  const replacement = segments.map((segment) => {
+    const updated = replaceRunText(run, segment.text);
+    return segment.bold ? addBoldToRun(updated) : updated;
+  }).join("");
+  const result = paragraphXml.replace(run, replacement);
+  return textFromXml(result) === originalText ? result : null;
 }
 
 export function selectApprovedProposals(proposals) {
@@ -505,18 +603,27 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
       for (const paragraphMatch of paragraphs) {
         const paragraphXml = paragraphMatch[0];
         if (textFromXml(paragraphXml) !== edit.originalText) continue;
-        const safety = assessParagraphEditSafety(paragraphXml);
+        const isEmphasis = edit.action === "emphasize";
+        const safety = isEmphasis
+          ? assessParagraphEmphasisSafety(paragraphXml)
+          : assessParagraphEditSafety(paragraphXml);
         if (!safety.safe) {
           results.push({ id: edit.id || null, status: "skipped", reason: "protected-formatting", message: safety.reason });
           break;
         }
-        const newParagraphXml = replaceUniformParagraphText(paragraphXml, edit.proposedText);
+        const newParagraphXml = isEmphasis
+          ? replaceUniformParagraphEmphasis(paragraphXml, edit.boldRanges)
+          : replaceUniformParagraphText(paragraphXml, edit.proposedText);
         if (!newParagraphXml) continue;
         const newShapeXml = shapeXml.replace(paragraphXml, newParagraphXml);
         xml = xml.replace(shapeXml, newShapeXml);
         shapeXml = newShapeXml;
         applied = true;
-        results.push({ id: edit.id || null, status: "applied", reason: "approved-uniform-formatting" });
+        results.push({
+          id: edit.id || null,
+          status: "applied",
+          reason: isEmphasis ? "approved-semantic-emphasis" : "approved-uniform-formatting",
+        });
         break;
       }
       if (applied) appliedCount += 1;

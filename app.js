@@ -111,6 +111,8 @@ function updateReportDownload() {
       elementName: item.elementName,
       originalText: item.originalText,
       proposedText: item.proposedText || item.placeholderText,
+      action: item.action || null,
+      boldRanges: item.boldRanges || null,
       rule: item.rule,
       explanation: item.explanation,
       source: item.source,
@@ -135,6 +137,26 @@ function makeTextBlock(label, text, className) {
   heading.textContent = label;
   const value = document.createElement("p");
   value.textContent = text || "None";
+  block.append(heading, value);
+  return block;
+}
+
+function makeEmphasisBlock(item) {
+  const block = document.createElement("div");
+  block.className = "proposal-text proposed-text emphasis-preview";
+  const heading = document.createElement("strong");
+  heading.textContent = "Proposed emphasis";
+  const value = document.createElement("p");
+  let cursor = 0;
+  for (const range of item.boldRanges || []) {
+    value.appendChild(document.createTextNode(item.originalText.slice(cursor, range.start)));
+    const emphasized = document.createElement("span");
+    emphasized.className = "semantic-emphasis";
+    emphasized.textContent = item.originalText.slice(range.start, range.end);
+    value.appendChild(emphasized);
+    cursor = range.end;
+  }
+  value.appendChild(document.createTextNode(item.originalText.slice(cursor)));
   block.append(heading, value);
   return block;
 }
@@ -183,17 +205,22 @@ function renderItems(items) {
     heading.textContent = `Slide ${item.slide} · ${item.elementName || `Element ${item.objectId || "unknown"}`}`;
     const meta = document.createElement("p");
     meta.className = "proposal-meta";
-    meta.textContent = `Rule ${item.rule} · ${item.source === "ai-analysis" ? "AI suggestion" : "local review finding"}`;
+    const aiLabel = item.action === "emphasize" ? "AI emphasis suggestion" : "AI wording suggestion";
+    meta.textContent = `Rule ${item.rule} · ${item.source === "ai-analysis" ? aiLabel : "local review finding"}`;
+
+    const proposedBlock = item.action === "emphasize"
+      ? makeEmphasisBlock(item)
+      : makeTextBlock(
+        "Proposed",
+        item.proposedText || item.placeholderText,
+        `proposal-text proposed-text${item.actionable ? "" : " placeholder-proposal"}`,
+      );
 
     card.append(
       heading,
       meta,
       makeTextBlock("Original", item.originalText, "proposal-text original-text"),
-      makeTextBlock(
-        "Proposed",
-        item.proposedText || item.placeholderText,
-        `proposal-text proposed-text${item.actionable ? "" : " placeholder-proposal"}`,
-      ),
+      proposedBlock,
       makeTextBlock("Why", item.explanation, "proposal-explanation"),
     );
 

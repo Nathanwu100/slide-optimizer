@@ -32,6 +32,7 @@ export async function makeFixturePptx() {
   <p:cSld><p:spTree>
     <p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:rPr b="1"/><a:t>A deliberately long title requiring a human to identify its actual takeaway</a:t></a:r></a:p></p:txBody></p:sp>
     <p:sp><p:nvSpPr><p:cNvPr id="3" name="Body 2"/></p:nvSpPr><p:txBody><a:p><a:r><a:rPr b="1"/><a:t>Mixed </a:t></a:r><a:r><a:rPr baseline="30000"/><a:t>formatting</a:t></a:r><a:r><a:rPr/><a:t> remains exactly intact across every run in this deliberately long linked paragraph.</a:t></a:r><a:endParaRPr/><a:hlinkClick r:id="rId9"/></a:p></p:txBody></p:sp>
+    <p:sp><p:nvSpPr><p:cNvPr id="7" name="Plain body"/></p:nvSpPr><p:txBody><a:p><a:r><a:rPr lang="en-US"/><a:t>The retina processes visual information before sending signals to the brain.</a:t></a:r><a:endParaRPr/></a:p></p:txBody></p:sp>
     <p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Table 3"/></p:nvGraphicFramePr><a:graphic><a:graphicData><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>Table fact</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>
     <p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="5" name="Chart 4"/></p:nvGraphicFramePr><a:graphic><a:graphicData><c:chart r:id="rId4"/></a:graphicData></a:graphic></p:graphicFrame>
     <p:pic><p:nvPicPr><p:cNvPr id="6" name="Meaningful logo"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill><p:spPr><a:xfrm><a:ext cx="100" cy="100"/></a:xfrm></p:spPr></p:pic>
