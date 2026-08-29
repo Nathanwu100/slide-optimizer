@@ -24,9 +24,9 @@ const snapshot = {
   }] }],
 };
 
-test("missing Groq credentials returns explicit analysis-only mode", async () => {
-  const previousKey = process.env.GROQ_API_KEY;
-  delete process.env.GROQ_API_KEY;
+test("missing OpenAI credentials returns explicit analysis-only mode", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
   const request = {
     method: "POST",
     headers: { "x-lucid-request": "analysis-v1" },
@@ -38,7 +38,60 @@ test("missing Groq credentials returns explicit analysis-only mode", async () =>
   assert.equal(response.statusCode, 503);
   assert.equal(response.payload.mode, "analysis-only");
   assert.deepEqual(response.payload.proposals, []);
-  if (previousKey) process.env.GROQ_API_KEY = previousKey;
+  if (previousKey) process.env.OPENAI_API_KEY = previousKey;
+});
+
+test("OpenAI structured output is validated before proposals are returned", async () => {
+  const previousKey = process.env.OPENAI_API_KEY;
+  const previousFetch = globalThis.fetch;
+  process.env.OPENAI_API_KEY = "test-key";
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    assert.equal(options.headers.Authorization, "Bearer test-key");
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, "gpt-5-nano");
+    assert.equal(body.store, false);
+    assert.equal(body.text.format.type, "json_schema");
+    assert.equal(body.text.format.strict, true);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          status: "completed",
+          output: [{
+            type: "message",
+            content: [{
+              type: "output_text",
+              text: JSON.stringify({ proposals: [
+                { slide: 1, objectId: "2", originalText: "Original exact text.", proposedText: "A clearer version.", rule: 3, explanation: "Improves clarity." },
+                { slide: 1, objectId: "99", originalText: "Invented source", proposedText: "Invalid", rule: 3, explanation: "Invalid." },
+              ] }),
+            }],
+          }],
+        };
+      },
+    };
+  };
+
+  try {
+    const request = {
+      method: "POST",
+      headers: { "x-lucid-request": "analysis-v1" },
+      body: { presentation: snapshot },
+      socket: { remoteAddress: "test-openai-success" },
+    };
+    const response = mockResponse();
+    await handler(request, response);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.payload.mode, "proposal-review");
+    assert.equal(response.payload.applied, false);
+    assert.equal(response.payload.proposals.length, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousKey) process.env.OPENAI_API_KEY = previousKey;
+    else delete process.env.OPENAI_API_KEY;
+  }
 });
 
 test("cross-origin requests are rejected when no explicit origin is configured", async () => {
