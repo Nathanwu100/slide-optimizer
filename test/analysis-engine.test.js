@@ -8,6 +8,7 @@ import {
   applyProposalsToPptx,
   approveAllSafeProposals,
   assessParagraphEditSafety,
+  assessParagraphEmphasisSafety,
   buildLocalFindings,
   createAnalysisSnapshot,
   selectApprovedProposals,
@@ -90,6 +91,8 @@ test("paragraph safety blocks hyperlinks and mixed formatting", () => {
   const uniform = `<a:p><a:r><a:rPr b="1"/><a:t>Consistently bold</a:t></a:r></a:p>`;
   assert.equal(assessParagraphEditSafety(linked).safe, false);
   assert.equal(assessParagraphEditSafety(uniform).safe, true);
+  assert.equal(assessParagraphEmphasisSafety(uniform).safe, false);
+  assert.equal(assessParagraphEmphasisSafety(`<a:p><a:r><a:rPr/><a:t>Plain text</a:t></a:r></a:p>`).safe, true);
 });
 
 test("only explicitly approved proposals are selected", () => {
@@ -169,6 +172,41 @@ test("approved uniform text is rewritten while protected package parts remain by
   for (const [name, hash] of protectedHashes) {
     assert.equal(digest(await outputZip.file(name).async("uint8array")), hash, `${name} changed`);
   }
+});
+
+test("approved semantic emphasis bolds only exact phrases without changing any words", async () => {
+  const { JSZip, bytes } = await makeFixturePptx();
+  const sourceHash = digest(bytes);
+  const analysis = await analyzePptx(bytes, null, JSZip);
+  const snapshot = createAnalysisSnapshot(analysis);
+  const body = snapshot.slides[0].elements.find((element) => element.objectId === "7");
+  const originalText = body.paragraphs[0].text;
+  const [proposal] = validateAiProposals(snapshot, [{
+    action: "emphasize",
+    slide: 1,
+    objectId: "7",
+    originalText,
+    proposedText: originalText,
+    boldRanges: [
+      { start: 21, end: 39, text: "visual information" },
+      { start: 66, end: 75, text: "the brain" },
+    ],
+    rule: 4,
+    explanation: "Highlights the process and outcome.",
+  }]);
+  assert.equal(proposal.actionable, true);
+  proposal.decision = "approved";
+
+  const outcome = await applyProposalsToPptx(bytes, [proposal], JSZip);
+  assert.equal(outcome.appliedCount, 1);
+  assert.equal(outcome.results[0].reason, "approved-semantic-emphasis");
+  assert.equal(digest(bytes), sourceHash, "source bytes changed");
+
+  const outputZip = await JSZip.loadAsync(new Uint8Array(await outcome.blob.arrayBuffer()));
+  const outputSlide = await outputZip.file("ppt/slides/slide1.xml").async("string");
+  assert.match(outputSlide, /<a:rPr b="1" lang="en-US"\/><a:t>visual information<\/a:t>/);
+  assert.match(outputSlide, /<a:rPr b="1" lang="en-US"\/><a:t>the brain<\/a:t>/);
+  assert.equal(analyzeSlideXml(outputSlide, 1).elements.find((element) => element.objectId === "7").text, originalText);
 });
 
 test("mixed-format and hyperlinked AI suggestions remain manual-only", async () => {
