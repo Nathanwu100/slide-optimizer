@@ -49,7 +49,8 @@ test("OpenAI structured output is validated before proposals are returned", asyn
     assert.equal(url, "https://api.openai.com/v1/responses");
     assert.equal(options.headers.Authorization, "Bearer test-key");
     const body = JSON.parse(options.body);
-    assert.equal(body.model, "gpt-5-nano");
+    assert.equal(body.model, "gpt-5.6-luna");
+    assert.equal(body.reasoning.effort, "medium");
     assert.equal(body.store, false);
     assert.equal(body.text.format.type, "json_schema");
     assert.equal(body.text.format.strict, true);
@@ -87,6 +88,7 @@ test("OpenAI structured output is validated before proposals are returned", asyn
     assert.equal(response.payload.mode, "proposal-review");
     assert.equal(response.payload.applied, false);
     assert.equal(response.payload.proposals.length, 1);
+    assert.match(response.payload.message, /1 AI suggestion is ready/);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousKey) process.env.OPENAI_API_KEY = previousKey;

@@ -22,7 +22,7 @@ The original file is never modified. Untouched PowerPoint package parts, includi
 
 ## Optional OpenAI analysis
 
-`api/analyze.js` is a Vercel Function that keeps `OPENAI_API_KEY` server-side, uses OpenAI structured output, and revalidates every proposal against an exact slide, object ID, and complete source paragraph. The default model is `gpt-5-nano`; set `OPENAI_MODEL` only if a different compatible model has been tested with this workflow.
+`api/analyze.js` is a Vercel Function that keeps `OPENAI_API_KEY` server-side, uses OpenAI structured output, and revalidates every proposal against an exact slide, object ID, and complete source paragraph. The default model is `gpt-5.6-luna`; set `OPENAI_MODEL` only if a different compatible model has been tested with this workflow.
 
 If `OPENAI_API_KEY` is absent, the endpoint returns a clearly labeled `analysis-only` response and the browser continues with local findings. Never put an API key in frontend code or ask a user to paste one into the site.
 

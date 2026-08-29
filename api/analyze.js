@@ -81,16 +81,14 @@ export default async function handler(request, response) {
     "Analyze this presentation snapshot and propose optional edits; never claim an edit was applied.",
     "Every proposal must identify an existing slide and objectId and set originalText to one complete paragraph copied exactly from that element.",
     "Use semantic judgment. Do not shorten text, bold opening words, resize content, or remove elements merely because of a numeric threshold.",
+    "Prioritize meaningful improvements to clarity, grammar, concision, and slide-level takeaways. Ignore trailing spaces, dash styles, and other whitespace-, punctuation-, or typography-only changes.",
     "Do not propose deleting logos, icons, diagrams, charts, tables, citations, hyperlinks, or images without clear meaning-based evidence.",
     "Focus on rules 1-6, 8-10, and 12. Rules 7 and 11 require manual animation work and must not be proposed as automatic edits.",
     "Review every slide in the snapshot, not just the first few or the ones that stand out most. Slides with three or more bullet points or dense paragraphs need special attention: if several lines on the same slide are wordy or unclear, propose an edit for each one that needs it, not just the single worst line on that slide.",
-    "Return only proposals worth showing to a human for approval — it is valid to skip a slide entirely if every line on it is already clear and concise. It is valid to return an empty list.",
+    "Work in two passes: first inspect every paragraph for objective or meaning-based issues, then select the most useful changes across the whole deck.",
+    "Return only proposals worth showing to a human for approval. Skip clear slides, but return an empty list only after checking every paragraph and finding no meaningful clarity, grammar, concision, or takeaway improvement.",
     "Return at most 20 proposals total. If more than 20 slide lines deserve an edit, keep the 20 most impactful ones spread across the whole deck rather than concentrating them on one or two slides.",
     "Keep each explanation to one short sentence (15 words or fewer) — this keeps the response compact and within the account's token limits.",
-    "",
-    'Respond with ONLY a JSON object in exactly this shape, nothing else:',
-    '{"proposals":[{"slide":1,"objectId":"123","originalText":"exact original text","proposedText":"your rewrite","rule":3,"explanation":"why this helps"}]}',
-    'If nothing is worth changing, respond with {"proposals":[]}',
     "",
     "Presentation snapshot:",
     JSON.stringify(snapshot),
@@ -104,10 +102,10 @@ export default async function handler(request, response) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-5-nano",
+        model: process.env.OPENAI_MODEL || "gpt-5.6-luna",
         instructions: "You return only valid JSON matching the supplied schema. Never claim that a proposed edit was applied.",
         input: prompt,
-        reasoning: { effort: "low" },
+        reasoning: { effort: "medium" },
         max_output_tokens: 6000,
         store: false,
         text: {
@@ -140,10 +138,14 @@ export default async function handler(request, response) {
     const text = responseOutputText(payload);
     if (!text) throw new Error("OpenAI returned no output text.");
     const parsed = JSON.parse(text);
+    const proposals = validateProposalResponse(snapshot, parsed);
     return response.status(200).json({
       mode: "proposal-review",
-      proposals: validateProposalResponse(snapshot, parsed),
+      proposals,
       applied: false,
+      message: proposals.length
+        ? `${proposals.length} AI suggestion${proposals.length === 1 ? " is" : "s are"} ready for review. Nothing has been applied.`
+        : "AI analysis completed, but it did not identify any meaningful suggestions for this presentation. Nothing was changed.",
     });
   } catch (error) {
     console.error("OpenAI analysis failed", error);
