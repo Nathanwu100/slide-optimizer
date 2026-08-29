@@ -426,6 +426,17 @@ export function selectApprovedProposals(proposals) {
   return proposals.filter((proposal) => proposal?.actionable !== false && proposal?.decision === "approved");
 }
 
+export function approveAllSafeProposals(proposals) {
+  if (!Array.isArray(proposals)) return 0;
+  let approvedCount = 0;
+  for (const proposal of proposals) {
+    if (proposal?.actionable !== true) continue;
+    proposal.decision = "approved";
+    approvedCount += 1;
+  }
+  return approvedCount;
+}
+
 function escapeXmlText(value = "") {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

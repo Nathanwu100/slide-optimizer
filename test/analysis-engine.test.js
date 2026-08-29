@@ -6,6 +6,7 @@ import {
   analyzePptx,
   analyzeSlideXml,
   applyProposalsToPptx,
+  approveAllSafeProposals,
   assessParagraphEditSafety,
   buildLocalFindings,
   createAnalysisSnapshot,
@@ -98,6 +99,18 @@ test("only explicitly approved proposals are selected", () => {
     { id: "manual", actionable: false, decision: "approved" },
   ];
   assert.deepEqual(selectApprovedProposals(proposals).map((proposal) => proposal.id), ["approved"]);
+});
+
+test("approve all selects only formatting-safe proposals", () => {
+  const proposals = [
+    { id: "safe", actionable: true, decision: "pending" },
+    { id: "manual", actionable: false, decision: "manual-only" },
+    { id: "finding", decision: "not-actionable" },
+  ];
+  assert.equal(approveAllSafeProposals(proposals), 1);
+  assert.equal(proposals[0].decision, "approved");
+  assert.equal(proposals[1].decision, "manual-only");
+  assert.equal(proposals[2].decision, "not-actionable");
 });
 
 test("AI proposals must reference an exact existing paragraph", () => {
