@@ -1,6 +1,7 @@
 import {
   analyzePptx,
   applyProposalsToPptx,
+  approveAllSafeProposals,
   createAnalysisSnapshot,
   selectApprovedProposals,
   validateAiProposals,
@@ -16,6 +17,7 @@ const resultSummary = document.getElementById("resultSummary");
 const modeNotice = document.getElementById("modeNotice");
 const inventoryList = document.getElementById("inventoryList");
 const proposalContainer = document.getElementById("proposalContainer");
+const approveAllButton = document.getElementById("approveAllButton");
 const applyApprovedButton = document.getElementById("applyApprovedButton");
 const pptxDownload = document.getElementById("pptxDownload");
 const reportDownload = document.getElementById("reportDownload");
@@ -31,6 +33,7 @@ for (const [id, element] of Object.entries({
   modeNotice,
   inventoryList,
   proposalContainer,
+  approveAllButton,
   applyApprovedButton,
   pptxDownload,
   reportDownload,
@@ -58,6 +61,8 @@ function resetPanels() {
   resultBox.style.display = "none";
   inventoryList.replaceChildren();
   proposalContainer.replaceChildren();
+  approveAllButton.style.display = "none";
+  approveAllButton.disabled = true;
   applyApprovedButton.style.display = "none";
   applyApprovedButton.disabled = true;
   if (currentReportUrl) URL.revokeObjectURL(currentReportUrl);
@@ -138,6 +143,11 @@ function updateApplyButton() {
   if (!currentResult) return;
   const actionable = currentResult.items.filter((item) => item.actionable);
   const approved = selectApprovedProposals(actionable);
+  approveAllButton.style.display = actionable.length ? "inline-block" : "none";
+  approveAllButton.disabled = approved.length === actionable.length;
+  approveAllButton.textContent = approved.length === actionable.length
+    ? `All ${actionable.length} safe suggestion${actionable.length === 1 ? " is" : "s are"} approved`
+    : `Approve all ${actionable.length} safe suggestion${actionable.length === 1 ? "" : "s"}`;
   applyApprovedButton.style.display = actionable.length ? "inline-block" : "none";
   applyApprovedButton.disabled = approved.length === 0;
   applyApprovedButton.textContent = approved.length
@@ -344,6 +354,14 @@ async function handleFile(file) {
   }
 }
 
+approveAllButton.addEventListener("click", () => {
+  if (!currentResult) return;
+  invalidateOutputAfterDecisionChange();
+  approveAllSafeProposals(currentResult.items);
+  renderItems(currentResult.items);
+  updateApplyButton();
+  updateReportDownload();
+});
 applyApprovedButton.addEventListener("click", applyApprovedChanges);
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", (event) => {
