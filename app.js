@@ -242,7 +242,9 @@ async function requestAiProposals(analysis) {
     if (!response.ok) throw new Error(data.error || `Backend request failed (${response.status})`);
     return {
       proposals: validateAiProposals(snapshot, data.proposals),
-      notice: "AI suggestions are ready for review. Nothing has been applied.",
+      notice: data.message || (data.proposals?.length
+        ? "AI suggestions are ready for review. Nothing has been applied."
+        : "AI analysis completed without any meaningful suggestions. Nothing was changed."),
     };
   } catch (error) {
     return {
