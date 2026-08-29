@@ -20,11 +20,11 @@ The repaired workflow:
 
 The original file is never modified. Untouched PowerPoint package parts, including media, relationships, notes, charts, and tables, are preserved. The writer refuses unapproved changes and paragraphs whose formatting cannot be preserved conservatively.
 
-## Optional Groq analysis
+## Optional OpenAI analysis
 
-`api/analyze.js` is a Vercel Function that keeps `GROQ_API_KEY` server-side, uses Groq structured output, and revalidates every proposal against an exact slide, object ID, and complete source paragraph. The default model is `openai/gpt-oss-120b` because the Llama models previously used by this branch were retired for free and developer accounts on August 16, 2026.
+`api/analyze.js` is a Vercel Function that keeps `OPENAI_API_KEY` server-side, uses OpenAI structured output, and revalidates every proposal against an exact slide, object ID, and complete source paragraph. The default model is `gpt-5-nano`; set `OPENAI_MODEL` only if a different compatible model has been tested with this workflow.
 
-If `GROQ_API_KEY` is absent, the endpoint returns a clearly labeled `analysis-only` response and the browser continues with local findings. Never put an API key in frontend code or ask a user to paste one into the site.
+If `OPENAI_API_KEY` is absent, the endpoint returns a clearly labeled `analysis-only` response and the browser continues with local findings. Never put an API key in frontend code or ask a user to paste one into the site.
 
 Environment variables are documented in `.env.example`.
 

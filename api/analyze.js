@@ -39,6 +39,17 @@ function bodySize(request) {
   return Buffer.byteLength(JSON.stringify(request.body || {}));
 }
 
+function responseOutputText(payload) {
+  if (typeof payload?.output_text === "string") return payload.output_text;
+  if (!Array.isArray(payload?.output)) return "";
+  return payload.output
+    .filter((item) => item?.type === "message" && Array.isArray(item.content))
+    .flatMap((item) => item.content)
+    .filter((item) => item?.type === "output_text" && typeof item.text === "string")
+    .map((item) => item.text)
+    .join("");
+}
+
 export default async function handler(request, response) {
   setSecurityHeaders(response);
   if (request.method !== "POST") return response.status(405).json({ error: "Method not allowed." });
@@ -57,7 +68,7 @@ export default async function handler(request, response) {
     return response.status(400).json({ error: error.message });
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return response.status(503).json({
       mode: "analysis-only",
@@ -85,60 +96,49 @@ export default async function handler(request, response) {
     JSON.stringify(snapshot),
   ].join("\n");
 
-  // Groq enforces a tokens-per-minute cap that counts prompt tokens PLUS the
-  // requested max_tokens up front (not just actual usage). A fixed max_tokens
-  // can exceed that cap on larger decks, so size it dynamically against a
-  // rough prompt-token estimate (~4 chars/token) instead of a flat constant.
-  const TPM_BUDGET = 7500; // stays under the 8000 TPM limit seen on smaller Groq tiers, with margin
-  const estimatedPromptTokens = Math.ceil(prompt.length / 4);
-  const remainingCompletionTokens = TPM_BUDGET - estimatedPromptTokens;
-  if (remainingCompletionTokens < 1200) {
-    return response.status(413).json({
-      error: "This presentation is too large for AI analysis on the current Groq plan/model. Try a smaller deck, or raise the account's token limit.",
-    });
-  }
-  const maxCompletionTokens = Math.min(6000, remainingCompletionTokens);
-
   try {
-    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
-        temperature: 0.2,
-        max_tokens: maxCompletionTokens,
-        reasoning_effort: "low",
-        response_format: {
-          type: "json_schema",
-          json_schema: {
+        model: process.env.OPENAI_MODEL || "gpt-5-nano",
+        instructions: "You return only valid JSON matching the supplied schema. Never claim that a proposed edit was applied.",
+        input: prompt,
+        reasoning: { effort: "low" },
+        max_output_tokens: 6000,
+        store: false,
+        text: {
+          format: {
+            type: "json_schema",
             name: "lucid_slide_proposals",
             strict: true,
             schema: proposalSchema(),
           },
         },
-        messages: [
-          {
-            role: "system",
-            content: "You are an assistant that returns only valid JSON matching the schema the user provides. Never include prose outside the JSON object.",
-          },
-          { role: "user", content: prompt },
-        ],
       }),
     });
-    const payload = await groqResponse.json().catch(() => ({}));
-    if (!groqResponse.ok) {
-      console.error("Groq analysis failed", payload?.error || groqResponse.status);
-      if (payload?.error?.code === "rate_limit_exceeded") {
+    const payload = await openaiResponse.json().catch(() => ({}));
+    if (!openaiResponse.ok) {
+      console.error("OpenAI analysis failed", payload?.error || openaiResponse.status);
+      if (openaiResponse.status === 429 || payload?.error?.code === "rate_limit_exceeded") {
         return response.status(429).json({
-          error: "The AI analysis account hit its per-minute token limit. Wait a moment and try again, or switch GROQ_MODEL to a smaller model with a higher limit in Vercel's environment variables.",
+          error: "The AI analysis account reached its current rate or spending limit. Wait a moment, then check OpenAI usage and billing if the problem continues.",
         });
+      }
+      if (openaiResponse.status === 401) {
+        return response.status(503).json({ error: "The OpenAI API key was rejected. Update OPENAI_API_KEY in Vercel and redeploy." });
       }
       return response.status(502).json({ error: "The analysis service was unavailable." });
     }
-    const text = payload?.choices?.[0]?.message?.content || "{}";
+    if (payload?.status === "incomplete") {
+      console.error("OpenAI analysis incomplete", payload?.incomplete_details || payload?.status);
+      return response.status(502).json({ error: "The analysis service could not finish reviewing this presentation." });
+    }
+    const text = responseOutputText(payload);
+    if (!text) throw new Error("OpenAI returned no output text.");
     const parsed = JSON.parse(text);
     return response.status(200).json({
       mode: "proposal-review",
@@ -146,7 +146,7 @@ export default async function handler(request, response) {
       applied: false,
     });
   } catch (error) {
-    console.error("Groq analysis failed", error);
+    console.error("OpenAI analysis failed", error);
     return response.status(502).json({ error: "The analysis service returned an invalid response." });
   }
 }
