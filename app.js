@@ -89,24 +89,41 @@ function makeTextBlock(label, text, className) {
   return block;
 }
 
-/* Renders the new wording with the phrases that were bolded in the slide shown
- * bold here too, so the preview matches the downloaded file. */
+function renderLine(node, line) {
+  let cursor = 0;
+  for (const range of line.boldRanges || []) {
+    node.appendChild(document.createTextNode(line.text.slice(cursor, range.start)));
+    const emphasized = document.createElement("span");
+    emphasized.className = "semantic-emphasis";
+    emphasized.textContent = line.text.slice(range.start, range.end);
+    node.appendChild(emphasized);
+    cursor = range.end;
+  }
+  node.appendChild(document.createTextNode(line.text.slice(cursor)));
+}
+
+/* Renders the new wording exactly as it lands in the slide: bolded phrases
+ * bold, and a split paragraph shown as the bullet list it becomes. */
 function makeSimplifiedBlock(item) {
   const block = document.createElement("div");
   block.className = "proposal-text proposed-text";
   const heading = document.createElement("strong");
   heading.textContent = "Simplified";
-  const value = document.createElement("p");
-  let cursor = 0;
-  for (const range of item.boldRanges || []) {
-    value.appendChild(document.createTextNode(item.proposedText.slice(cursor, range.start)));
-    const emphasized = document.createElement("span");
-    emphasized.className = "semantic-emphasis";
-    emphasized.textContent = item.proposedText.slice(range.start, range.end);
-    value.appendChild(emphasized);
-    cursor = range.end;
+  const lines = item.lines || [{ text: item.proposedText, boldRanges: item.boldRanges }];
+
+  if (lines.length > 1) {
+    const list = document.createElement("ul");
+    for (const line of lines) {
+      const entry = document.createElement("li");
+      renderLine(entry, line);
+      list.appendChild(entry);
+    }
+    block.append(heading, list);
+    return block;
   }
-  value.appendChild(document.createTextNode(item.proposedText.slice(cursor)));
+
+  const value = document.createElement("p");
+  renderLine(value, lines[0]);
   block.append(heading, value);
   return block;
 }
@@ -181,8 +198,8 @@ function updateReportDownload() {
       rule: item.rule,
       ruleTitle: item.ruleTitle,
       originalText: item.originalText,
-      simplifiedText: item.proposedText,
-      emphasized: (item.boldRanges || []).map((range) => range.text),
+      simplifiedLines: (item.lines || []).map((line) => line.text),
+      emphasized: (item.lines || []).flatMap((line) => (line.boldRanges || []).map((range) => range.text)),
       explanation: item.explanation,
       status: item.applicationStatus || "not-applied",
     })),
