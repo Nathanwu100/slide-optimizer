@@ -1,11 +1,10 @@
 import {
   analyzePptx,
   applyProposalsToPptx,
-  approveAllSafeProposals,
   createAnalysisSnapshot,
-  selectApprovedProposals,
   validateAiProposals,
 } from "./simplify-engine.js";
+import { RULE_TITLES } from "./lib/rules.js";
 
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("fileInput");
@@ -17,8 +16,6 @@ const resultSummary = document.getElementById("resultSummary");
 const modeNotice = document.getElementById("modeNotice");
 const inventoryList = document.getElementById("inventoryList");
 const proposalContainer = document.getElementById("proposalContainer");
-const approveAllButton = document.getElementById("approveAllButton");
-const applyApprovedButton = document.getElementById("applyApprovedButton");
 const pptxDownload = document.getElementById("pptxDownload");
 const reportDownload = document.getElementById("reportDownload");
 
@@ -33,8 +30,6 @@ for (const [id, element] of Object.entries({
   modeNotice,
   inventoryList,
   proposalContainer,
-  approveAllButton,
-  applyApprovedButton,
   pptxDownload,
   reportDownload,
 })) {
@@ -45,14 +40,6 @@ let currentReportUrl = "";
 let currentPptxUrl = "";
 let currentResult = null;
 
-function clearGeneratedCopy() {
-  if (currentPptxUrl) URL.revokeObjectURL(currentPptxUrl);
-  currentPptxUrl = "";
-  pptxDownload.removeAttribute("href");
-  pptxDownload.style.display = "none";
-  if (currentResult) currentResult.generation = null;
-}
-
 function resetPanels() {
   processingBox.style.display = "none";
   processingBox.replaceChildren();
@@ -61,13 +48,12 @@ function resetPanels() {
   resultBox.style.display = "none";
   inventoryList.replaceChildren();
   proposalContainer.replaceChildren();
-  approveAllButton.style.display = "none";
-  approveAllButton.disabled = true;
-  applyApprovedButton.style.display = "none";
-  applyApprovedButton.disabled = true;
   if (currentReportUrl) URL.revokeObjectURL(currentReportUrl);
   currentReportUrl = "";
-  clearGeneratedCopy();
+  if (currentPptxUrl) URL.revokeObjectURL(currentPptxUrl);
+  currentPptxUrl = "";
+  pptxDownload.removeAttribute("href");
+  pptxDownload.style.display = "none";
   currentResult = null;
 }
 
@@ -92,44 +78,6 @@ function appendInventory(label, value) {
   inventoryList.appendChild(item);
 }
 
-function updateReportDownload() {
-  if (!currentResult) return;
-  const generation = currentResult.generation || {};
-  const report = {
-    generatedAt: new Date().toISOString(),
-    fileName: currentResult.fileName,
-    sourceHash: currentResult.analysis.sourceHash,
-    sourceUnchanged: currentResult.analysis.sourceUnchanged,
-    outputPptxCreated: Boolean(generation.appliedCount),
-    changesApplied: generation.appliedCount || 0,
-    changesSkipped: generation.skippedCount || 0,
-    inventory: currentResult.analysis.inventory,
-    proposals: currentResult.items.map((item) => ({
-      id: item.id,
-      slide: item.slide,
-      objectId: item.objectId,
-      elementName: item.elementName,
-      originalText: item.originalText,
-      proposedText: item.proposedText || item.placeholderText,
-      action: item.action || null,
-      boldRanges: item.boldRanges || null,
-      rule: item.rule,
-      explanation: item.explanation,
-      source: item.source,
-      decision: item.decision || "not-actionable",
-      applicationStatus: item.applicationStatus || "not-applied",
-      safetyReason: item.safetyReason || null,
-    })),
-    limitations: currentResult.analysis.limitations,
-  };
-  if (currentReportUrl) URL.revokeObjectURL(currentReportUrl);
-  currentReportUrl = URL.createObjectURL(
-    new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
-  );
-  reportDownload.href = currentReportUrl;
-  reportDownload.download = currentResult.fileName.replace(/\.pptx$/i, "") + " — Lucid Slides summary.json";
-}
-
 function makeTextBlock(label, text, className) {
   const block = document.createElement("div");
   block.className = className;
@@ -141,234 +89,171 @@ function makeTextBlock(label, text, className) {
   return block;
 }
 
-function makeEmphasisBlock(item) {
+/* Renders the new wording with the phrases that were bolded in the slide shown
+ * bold here too, so the preview matches the downloaded file. */
+function makeSimplifiedBlock(item) {
   const block = document.createElement("div");
-  block.className = "proposal-text proposed-text emphasis-preview";
+  block.className = "proposal-text proposed-text";
   const heading = document.createElement("strong");
-  heading.textContent = "Proposed emphasis";
+  heading.textContent = "Simplified";
   const value = document.createElement("p");
   let cursor = 0;
   for (const range of item.boldRanges || []) {
-    value.appendChild(document.createTextNode(item.originalText.slice(cursor, range.start)));
+    value.appendChild(document.createTextNode(item.proposedText.slice(cursor, range.start)));
     const emphasized = document.createElement("span");
     emphasized.className = "semantic-emphasis";
-    emphasized.textContent = item.originalText.slice(range.start, range.end);
+    emphasized.textContent = item.proposedText.slice(range.start, range.end);
     value.appendChild(emphasized);
     cursor = range.end;
   }
-  value.appendChild(document.createTextNode(item.originalText.slice(cursor)));
+  value.appendChild(document.createTextNode(item.proposedText.slice(cursor)));
   block.append(heading, value);
   return block;
 }
 
-function updateApplyButton() {
-  if (!currentResult) return;
-  const actionable = currentResult.items.filter((item) => item.actionable);
-  const approved = selectApprovedProposals(actionable);
-  approveAllButton.style.display = actionable.length ? "inline-block" : "none";
-  approveAllButton.disabled = approved.length === actionable.length;
-  approveAllButton.textContent = approved.length === actionable.length
-    ? `All ${actionable.length} safe suggestion${actionable.length === 1 ? " is" : "s are"} approved`
-    : `Approve all ${actionable.length} safe suggestion${actionable.length === 1 ? "" : "s"}`;
-  applyApprovedButton.style.display = actionable.length ? "inline-block" : "none";
-  applyApprovedButton.disabled = approved.length === 0;
-  applyApprovedButton.textContent = approved.length
-    ? `Create copy with ${approved.length} approved change${approved.length === 1 ? "" : "s"}`
-    : "Approve at least one change to create a copy";
-}
-
-function invalidateOutputAfterDecisionChange() {
-  if (!currentResult?.generation) return;
-  clearGeneratedCopy();
-  for (const item of currentResult.items) delete item.applicationStatus;
-  resultTitle.textContent = "Review the suggestions before creating a copy.";
-  resultSummary.textContent = "A previous download was cleared because the approval decisions changed.";
-}
-
-function renderItems(items) {
+function renderChanges(items, manualNotes) {
   proposalContainer.replaceChildren();
+
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty-findings";
-    empty.textContent = "No useful changes were proposed. Your presentation was left unchanged.";
+    empty.textContent = "No lines needed simplifying, so your presentation was left as it is.";
     proposalContainer.appendChild(empty);
-    return;
   }
 
   for (const item of items) {
     const card = document.createElement("article");
     card.className = "proposal-card";
     card.dataset.proposalId = item.id;
-    if (item.decision) card.dataset.decision = item.decision;
+    card.dataset.decision = item.applicationStatus === "applied" ? "approved" : "rejected";
 
     const heading = document.createElement("h4");
-    heading.textContent = `Slide ${item.slide} · ${item.elementName || `Element ${item.objectId || "unknown"}`}`;
+    heading.textContent = `Slide ${item.slide} · ${item.elementName || `Element ${item.objectId}`}`;
     const meta = document.createElement("p");
     meta.className = "proposal-meta";
-    const aiLabel = item.action === "emphasize" ? "AI emphasis suggestion" : "AI wording suggestion";
-    meta.textContent = `Rule ${item.rule} · ${item.source === "ai-analysis" ? aiLabel : "local review finding"}`;
-
-    const proposedBlock = item.action === "emphasize"
-      ? makeEmphasisBlock(item)
-      : makeTextBlock(
-        "Proposed",
-        item.proposedText || item.placeholderText,
-        `proposal-text proposed-text${item.actionable ? "" : " placeholder-proposal"}`,
-      );
+    meta.textContent = `Rule ${item.rule} — ${item.ruleTitle || RULE_TITLES[item.rule] || ""}`;
 
     card.append(
       heading,
       meta,
       makeTextBlock("Original", item.originalText, "proposal-text original-text"),
-      proposedBlock,
+      makeSimplifiedBlock(item),
       makeTextBlock("Why", item.explanation, "proposal-explanation"),
     );
 
-    const controls = document.createElement("div");
-    controls.className = "proposal-controls";
-    if (item.actionable) {
-      for (const decision of ["approved", "rejected"]) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = decision === "approved" ? "Approve" : "Reject";
-        button.className = decision === "approved" ? "approve-btn" : "reject-btn";
-        if (item.decision === decision) button.setAttribute("aria-pressed", "true");
-        button.addEventListener("click", () => {
-          invalidateOutputAfterDecisionChange();
-          item.decision = decision;
-          card.dataset.decision = decision;
-          controls.querySelectorAll("button").forEach((control) => control.removeAttribute("aria-pressed"));
-          button.setAttribute("aria-pressed", "true");
-          updateApplyButton();
-          updateReportDownload();
-        });
-        controls.appendChild(button);
-      }
-    } else {
-      const note = document.createElement("span");
-      note.className = "not-actionable";
-      note.textContent = item.source === "ai-analysis"
-        ? `Manual edit only: ${item.safetyReason}`
-        : "No automatic edit is available for this local finding.";
-      controls.appendChild(note);
-    }
-
-    if (item.applicationStatus) {
+    if (item.applicationStatus && item.applicationStatus !== "applied") {
       const status = document.createElement("span");
-      status.className = `application-status ${item.applicationStatus}`;
-      status.textContent = item.applicationStatus === "applied" ? "Applied to new copy" : "Skipped for safety";
-      controls.appendChild(status);
+      status.className = "application-status skipped";
+      status.textContent = "Could not be written into this slide";
+      card.appendChild(status);
     }
-    card.appendChild(controls);
+    proposalContainer.appendChild(card);
+  }
+
+  for (const note of manualNotes || []) {
+    const card = document.createElement("article");
+    card.className = "proposal-card";
+    const heading = document.createElement("h4");
+    heading.textContent = `Slide ${note.slide} · manual step`;
+    const meta = document.createElement("p");
+    meta.className = "proposal-meta";
+    meta.textContent = `Rule ${note.rule} — ${RULE_TITLES[note.rule] || ""}`;
+    const body = document.createElement("p");
+    body.textContent = note.note;
+    card.append(heading, meta, body);
     proposalContainer.appendChild(card);
   }
 }
 
-async function requestAiProposals(analysis) {
-  const snapshot = createAnalysisSnapshot(analysis);
-  try {
-    const response = await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Lucid-Request": "analysis-v1" },
-      body: JSON.stringify({ presentation: snapshot }),
-    });
-    const data = await response.json().catch(() => ({}));
-    if (response.status === 503 && data.mode === "analysis-only") {
-      return { proposals: [], notice: data.message || "AI analysis is not configured." };
-    }
-    if (!response.ok) throw new Error(data.error || `Backend request failed (${response.status})`);
-    return {
-      proposals: validateAiProposals(snapshot, data.proposals),
-      notice: data.message || (data.proposals?.length
-        ? "AI suggestions are ready for review. Nothing has been applied."
-        : "AI analysis completed without any meaningful suggestions. Nothing was changed."),
-    };
-  } catch (error) {
-    return {
-      proposals: [],
-      notice: `AI analysis was unavailable (${error.message}). Showing local findings only; nothing was changed.`,
-    };
-  }
+function updateReportDownload() {
+  if (!currentResult) return;
+  const report = {
+    generatedAt: new Date().toISOString(),
+    fileName: currentResult.fileName,
+    sourceHash: currentResult.analysis.sourceHash,
+    changesApplied: currentResult.generation?.appliedCount || 0,
+    changesSkipped: currentResult.generation?.skippedCount || 0,
+    inventory: currentResult.analysis.inventory,
+    changes: currentResult.items.map((item) => ({
+      slide: item.slide,
+      objectId: item.objectId,
+      elementName: item.elementName,
+      rule: item.rule,
+      ruleTitle: item.ruleTitle,
+      originalText: item.originalText,
+      simplifiedText: item.proposedText,
+      emphasized: (item.boldRanges || []).map((range) => range.text),
+      explanation: item.explanation,
+      status: item.applicationStatus || "not-applied",
+    })),
+    manualSteps: currentResult.analysis.manualNotes,
+  };
+  if (currentReportUrl) URL.revokeObjectURL(currentReportUrl);
+  currentReportUrl = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+  reportDownload.href = currentReportUrl;
+  reportDownload.download = `${currentResult.fileName.replace(/\.pptx$/i, "")} — Lucid Slides summary.json`;
 }
 
-async function applyApprovedChanges() {
-  if (!currentResult) return;
-  const approved = selectApprovedProposals(currentResult.items);
-  if (!approved.length) return;
-
-  applyApprovedButton.disabled = true;
-  clearGeneratedCopy();
-  processingBox.replaceChildren();
-  logLine("Creating a new copy with only the approved, formatting-safe changes…");
-  try {
-    const outcome = await applyProposalsToPptx(currentResult.sourceBytes, approved);
-    currentResult.generation = outcome;
-    const resultById = new Map(outcome.results.map((result) => [result.id, result]));
-    for (const item of currentResult.items) {
-      const application = resultById.get(item.id);
-      if (application) item.applicationStatus = application.status;
-    }
-
-    if (outcome.blob && outcome.appliedCount) {
-      currentPptxUrl = URL.createObjectURL(outcome.blob);
-      pptxDownload.href = currentPptxUrl;
-      pptxDownload.download = currentResult.fileName.replace(/\.pptx$/i, "") + " (simplified).pptx";
-      pptxDownload.style.display = "inline-block";
-      resultTitle.textContent = "Your reviewed copy is ready.";
-      resultSummary.textContent = `${outcome.appliedCount} approved change${outcome.appliedCount === 1 ? " was" : "s were"} applied. ${outcome.skippedCount ? `${outcome.skippedCount} change${outcome.skippedCount === 1 ? " was" : "s were"} skipped for safety. ` : ""}Your original file is unchanged.`;
-      modeNotice.textContent = "Download and inspect the new copy. The original presentation was never modified.";
-    } else {
-      resultTitle.textContent = "No safe automatic changes could be applied.";
-      resultSummary.textContent = "The approved suggestions require manual PowerPoint editing, so no replacement file was generated.";
-      modeNotice.textContent = "Your original presentation remains unchanged.";
-    }
-    renderItems(currentResult.items);
-    updateReportDownload();
-  } catch (error) {
-    showError(`Lucid Slides could not safely create a copy: ${error.message}`);
-  } finally {
-    processingBox.style.display = "none";
-    updateApplyButton();
-  }
+async function requestSimplifications(analysis) {
+  const snapshot = createAnalysisSnapshot(analysis);
+  const response = await fetch("/api/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Lucid-Request": "analysis-v1" },
+    body: JSON.stringify({ presentation: snapshot }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `The simplifier is unavailable (HTTP ${response.status}).`);
+  return {
+    edits: validateAiProposals(snapshot, data.proposals),
+    message: data.message || "",
+    warnings: data.warnings || [],
+  };
 }
 
 async function handleFile(file) {
   resetPanels();
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".pptx")) {
-    showError("Choose a .pptx file. Lucid Slides never modifies your original presentation.");
+    showError("Choose a .pptx file. Your original presentation is never modified.");
     return;
   }
 
   try {
-    logLine(`Reading ${file.name} locally…`);
+    logLine(`Reading ${file.name}…`);
     const arrayBuffer = await file.arrayBuffer();
     const analysis = await analyzePptx(arrayBuffer, logLine);
-    logLine("Requesting optional meaning-based suggestions…");
-    const ai = await requestAiProposals(analysis);
-    const items = [...ai.proposals, ...analysis.findings];
-    currentResult = {
-      fileName: file.name,
-      sourceBytes: arrayBuffer.slice(0),
-      analysis,
-      items,
-      generation: null,
-    };
 
-    resultTitle.textContent = ai.proposals.length
-      ? "Review the suggestions before creating a copy."
-      : "Analysis complete — your presentation was not modified.";
-    resultSummary.textContent = `${analysis.inventory.slides} slides and ${analysis.inventory.words.toLocaleString()} words were inspected. ${ai.proposals.length ? `${ai.proposals.length} AI suggestion${ai.proposals.length === 1 ? " is" : "s are"} available.` : "No automatic changes are available."}`;
-    modeNotice.textContent = ai.notice;
+    logLine(`Simplifying ${analysis.inventory.editableParagraphs} lines across ${analysis.inventory.slides} slides…`);
+    const { edits, message, warnings } = await requestSimplifications(analysis);
+
+    logLine(edits.length ? `Applying ${edits.length} changes…` : "Nothing needed changing.");
+    const generation = await applyProposalsToPptx(arrayBuffer, edits);
+    const statusById = new Map(generation.results.map((result) => [result.id, result.status]));
+    for (const edit of edits) edit.applicationStatus = statusById.get(edit.id) || "skipped";
+
+    currentResult = { fileName: file.name, analysis, items: edits, generation };
+
+    if (generation.blob && generation.appliedCount) {
+      currentPptxUrl = URL.createObjectURL(generation.blob);
+      pptxDownload.href = currentPptxUrl;
+      pptxDownload.download = `${file.name.replace(/\.pptx$/i, "")} (simplified).pptx`;
+      pptxDownload.style.display = "inline-block";
+      resultTitle.textContent = "Your simplified presentation is ready.";
+      resultSummary.textContent = `${generation.appliedCount} line${generation.appliedCount === 1 ? " was" : "s were"} rewritten across ${analysis.inventory.slides} slides. Fonts, colours, images, charts and layout are unchanged, and your original file is untouched.`;
+    } else {
+      resultTitle.textContent = "Nothing was changed.";
+      resultSummary.textContent = `${analysis.inventory.slides} slides and ${analysis.inventory.words.toLocaleString()} words were reviewed, but no line needed rewriting.`;
+    }
+
+    modeNotice.textContent = warnings.length ? `${message} ${warnings.join(" ")}` : message;
     appendInventory("slides reviewed", analysis.inventory.slides);
-    appendInventory("media files preserved", analysis.inventory.media);
-    appendInventory("slide relationship parts preserved", analysis.inventory.slideRelationships);
-    appendInventory("notes parts preserved", analysis.inventory.notes);
+    appendInventory("lines rewritten", generation.appliedCount);
+    appendInventory("images preserved", analysis.inventory.media);
     appendInventory("charts preserved", analysis.inventory.charts);
-    appendInventory("tables detected and preserved", analysis.inventory.tables);
-    appendInventory("hyperlinked paragraphs detected and preserved", analysis.inventory.hyperlinks);
-    renderItems(items);
-    updateApplyButton();
+    appendInventory("tables preserved", analysis.inventory.tables);
+    appendInventory("hyperlinks preserved", analysis.inventory.hyperlinks);
+
+    renderChanges(edits, analysis.manualNotes);
     updateReportDownload();
 
     processingBox.style.display = "none";
@@ -377,19 +262,10 @@ async function handleFile(file) {
   } catch (error) {
     console.error(error);
     processingBox.style.display = "none";
-    showError(`Lucid Slides could not safely analyze that file: ${error.message}`);
+    showError(`Lucid Slides could not simplify that file: ${error.message}`);
   }
 }
 
-approveAllButton.addEventListener("click", () => {
-  if (!currentResult) return;
-  invalidateOutputAfterDecisionChange();
-  approveAllSafeProposals(currentResult.items);
-  renderItems(currentResult.items);
-  updateApplyButton();
-  updateReportDownload();
-});
-applyApprovedButton.addEventListener("click", applyApprovedChanges);
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.key === " ") {
