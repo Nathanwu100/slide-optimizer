@@ -8,11 +8,11 @@
  *   never auto-applied — only proposals with real, validated replacement
  *   text are written into the generated copy.
  */
-
+ 
 const SLIDE_PATH = /^ppt\/slides\/slide(\d+)\.xml$/;
 const REQUIRED_PARTS = ["[Content_Types].xml", "_rels/.rels", "ppt/presentation.xml"];
 const PLACEHOLDER_TEXT = "AI analysis required — Lucid Slides will not guess which wording or element is important.";
-
+ 
 function decodeXml(value = "") {
   return value
     .replace(/&lt;/g, "<")
@@ -23,21 +23,21 @@ function decodeXml(value = "") {
     .replace(/&#x([\da-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
     .replace(/&amp;/g, "&");
 }
-
+ 
 function readAttribute(xml = "", name) {
   const match = xml.match(new RegExp(`\\b${name}="([^"]*)"`));
   return match ? decodeXml(match[1]) : "";
 }
-
+ 
 function textFromXml(xml = "") {
   return Array.from(xml.matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>/g), (match) => decodeXml(match[1])).join("");
 }
-
+ 
 function wordCount(text = "") {
   const value = String(text).trim();
   return value ? value.split(/\s+/).length : 0;
 }
-
+ 
 function boldWordCount(paragraphXml = "") {
   let count = 0;
   for (const run of paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)) {
@@ -47,15 +47,28 @@ function boldWordCount(paragraphXml = "") {
   }
   return count;
 }
-
+ 
+const FORMATTING_ATTR_PATTERN = /\b(?:b|i|u|strike|sz|baseline|kumimoji|cap|spc|normalizeH|noProof)\s*=/;
+ 
+// Two runs with identical formatting can still be serialized with their XML
+// attributes in a different order (common from Google Slides exports and
+// hand-edited decks). Comparing raw matched text treats that as "different"
+// formatting and skips an otherwise-safe paragraph. Sorting attributes into a
+// canonical order before comparing fixes that false mismatch.
 function normalizedRunProperties(runXml = "") {
-  const match = runXml.match(/<a:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/a:rPr>)/);
-  if (!match || /^<a:rPr\b[^>]*\/>$/.test(match[0]) && !/\b(?:b|i|u|strike|sz|baseline|kumimoji|cap|spc|normalizeH|noProof)\s*=/.test(match[0])) {
-    return "";
-  }
-  return match[0].replace(/\s+/g, " ").trim();
+  const match = runXml.match(/<a:rPr\b([^>]*)(\/>|>([\s\S]*?)<\/a:rPr>)/);
+  if (!match) return "";
+  const [, attrText, closeOrBody, childrenRaw] = match;
+  const isSelfClosing = closeOrBody === "/>";
+  if (isSelfClosing && !FORMATTING_ATTR_PATTERN.test(attrText)) return "";
+  const attrs = [...attrText.matchAll(/([\w:.-]+)="([^"]*)"/g)]
+    .map(([, name, value]) => `${name}="${value}"`)
+    .sort()
+    .join(" ");
+  const children = (childrenRaw || "").replace(/\s+/g, " ").trim();
+  return `${attrs}|${children}`;
 }
-
+ 
 export function assessParagraphEditSafety(paragraphXml = "") {
   if (/<a:hlink(?:Click|MouseOver)\b/.test(paragraphXml)) {
     return { safe: false, reason: "Hyperlinked text requires a manual PowerPoint edit." };
@@ -66,21 +79,21 @@ export function assessParagraphEditSafety(paragraphXml = "") {
   if (/<a:br\b/.test(paragraphXml)) {
     return { safe: false, reason: "Text containing a manual line break requires a manual PowerPoint edit." };
   }
-
+ 
   const runs = [...paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)]
     .map((match) => match[0])
     .filter((runXml) => /<a:t\b/.test(runXml));
   if (!runs.length) {
     return { safe: false, reason: "No editable text run was found." };
   }
-
+ 
   const formattingSignatures = new Set(runs.map(normalizedRunProperties));
   if (formattingSignatures.size > 1) {
     return { safe: false, reason: "Mixed formatting is preserved by leaving this paragraph for manual review." };
   }
   return { safe: true, reason: "The paragraph uses one uniform text style that can be preserved exactly." };
 }
-
+ 
 export function assessParagraphEmphasisSafety(paragraphXml = "") {
   const editSafety = assessParagraphEditSafety(paragraphXml);
   if (!editSafety.safe) return editSafety;
@@ -96,7 +109,7 @@ export function assessParagraphEmphasisSafety(paragraphXml = "") {
   }
   return { safe: true, reason: "This plain, single-run paragraph can be emphasized without changing its wording." };
 }
-
+ 
 function elementType(elementXml, tagName) {
   if (tagName === "pic") return "image";
   if (/<a:tbl\b/.test(elementXml)) return "table";
@@ -106,12 +119,12 @@ function elementType(elementXml, tagName) {
   if (placeholderType === "title" || placeholderType === "ctrTitle") return "title";
   return "text";
 }
-
+ 
 export function analyzeSlideXml(xml, slideNumber) {
   if (typeof xml !== "string" || !/<p:sld\b/.test(xml)) {
     throw new Error(`Slide ${slideNumber} is not valid PresentationML.`);
   }
-
+ 
   const elements = [];
   let fallbackId = 0;
   for (const match of xml.matchAll(/<p:(sp|graphicFrame|pic)\b[\s\S]*?<\/p:\1>/g)) {
@@ -156,7 +169,7 @@ export function analyzeSlideXml(xml, slideNumber) {
       hasHyperlink: paragraphs.some((paragraph) => paragraph.hasHyperlink),
     });
   }
-
+ 
   return {
     slide: Number(slideNumber),
     elements,
@@ -172,11 +185,11 @@ export function analyzeSlideXml(xml, slideNumber) {
     },
   };
 }
-
+ 
 function findingId(slide, element, paragraph, rule) {
   return `slide-${slide}-element-${element.objectId}-paragraph-${paragraph?.index ?? "all"}-rule-${rule}`;
 }
-
+ 
 export function buildLocalFindings(slides) {
   const findings = [];
   for (const slide of slides) {
@@ -197,7 +210,7 @@ export function buildLocalFindings(slides) {
           source: "local-analysis",
         });
       }
-
+ 
       for (const paragraph of element.paragraphs) {
         if (element.type !== "title" && paragraph.wordCount > 12) {
           findings.push({
@@ -233,7 +246,7 @@ export function buildLocalFindings(slides) {
         }
       }
     }
-
+ 
     if (slide.counts.charts) {
       findings.push({
         id: `slide-${slide.slide}-chart-rule-8`,
@@ -250,7 +263,7 @@ export function buildLocalFindings(slides) {
         source: "local-analysis",
       });
     }
-
+ 
     const bulletCount = slide.elements.reduce(
       (sum, element) => sum + element.paragraphs.filter((paragraph) => paragraph.isBullet).length,
       0,
@@ -274,12 +287,12 @@ export function buildLocalFindings(slides) {
   }
   return findings;
 }
-
+ 
 async function sha256(bytes) {
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-
+ 
 function assertSafePackageNames(names) {
   for (const name of names) {
     if (name.startsWith("/") || name.split("/").includes("..")) {
@@ -287,11 +300,11 @@ function assertSafePackageNames(names) {
     }
   }
 }
-
+ 
 function countMatching(names, pattern) {
   return names.filter((name) => pattern.test(name)).length;
 }
-
+ 
 export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalThis.JSZip) {
   if (!zipLibrary?.loadAsync) throw new Error("The safe PowerPoint reader could not be loaded.");
   const sourceBytes = arrayBuffer instanceof Uint8Array
@@ -305,13 +318,13 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
   for (const part of REQUIRED_PARTS) {
     if (!zip.file(part)) throw new Error(`Missing required PowerPoint package part: ${part}`);
   }
-
+ 
   const slideFiles = names
     .map((name) => ({ name, match: name.match(SLIDE_PATH) }))
     .filter((entry) => entry.match)
     .sort((a, b) => Number(a.match[1]) - Number(b.match[1]));
   if (!slideFiles.length) throw new Error("No slides were found in this PowerPoint file.");
-
+ 
   const slides = [];
   const rawSlideHashes = {};
   for (const entry of slideFiles) {
@@ -322,11 +335,11 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     rawSlideHashes[entry.name] = await sha256(rawBytes);
     slides.push(analyzeSlideXml(xml, slideNumber));
   }
-
+ 
   onProgress?.("Confirming that the source bytes are unchanged…");
   const finalHash = await sha256(sourceBytes);
   if (finalHash !== sourceHash) throw new Error("Safety validation failed: source bytes changed during analysis.");
-
+ 
   const inventory = {
     packageEntries: names.length,
     slides: slideFiles.length,
@@ -339,7 +352,7 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     imagesReferenced: slides.reduce((sum, slide) => sum + slide.counts.images, 0),
     words: slides.reduce((sum, slide) => sum + slide.counts.words, 0),
   };
-
+ 
   return {
     mode: "analysis-only",
     sourceHash,
@@ -358,7 +371,7 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     ],
   };
 }
-
+ 
 export function createAnalysisSnapshot(analysis) {
   return {
     sourceHash: analysis.sourceHash,
@@ -380,7 +393,7 @@ export function createAnalysisSnapshot(analysis) {
     })),
   };
 }
-
+ 
 export function validateAiProposals(snapshot, proposals) {
   const lookup = new Map();
   for (const slide of snapshot.slides || []) {
@@ -436,7 +449,7 @@ export function validateAiProposals(snapshot, proposals) {
   }
   return validated;
 }
-
+ 
 function normalizeBoldRanges(text, ranges) {
   if (!Array.isArray(ranges) || ranges.length < 1 || ranges.length > 3) return null;
   const normalized = ranges.map((range) => ({
@@ -454,7 +467,7 @@ function normalizeBoldRanges(text, ranges) {
   if (selected >= text.trim().length || selected / text.length > 0.4) return null;
   return normalized;
 }
-
+ 
 function replaceUniformParagraphText(paragraphXml, newText) {
   if (!assessParagraphEditSafety(paragraphXml).safe) return null;
   const runs = [...paragraphXml.matchAll(/<a:r\b[\s\S]*?<\/a:r>/g)];
@@ -477,7 +490,7 @@ function replaceUniformParagraphText(paragraphXml, newText) {
   }
   return result;
 }
-
+ 
 function replaceRunText(runXml, text) {
   const textMatch = runXml.match(/<a:t\b[^>]*>[\s\S]*?<\/a:t>/);
   if (!textMatch) return null;
@@ -487,7 +500,7 @@ function replaceRunText(runXml, text) {
   }
   return runXml.replace(textMatch[0], `${openingTag}${escapeXmlText(text)}</a:t>`);
 }
-
+ 
 function addBoldToRun(runXml) {
   const properties = runXml.match(/<a:rPr\b[^>]*(?:\/>|>[\s\S]*?<\/a:rPr>)/)?.[0];
   if (!properties) return runXml.replace(/^<a:r\b[^>]*>/, (opening) => `${opening}<a:rPr b="1"/>`);
@@ -496,7 +509,7 @@ function addBoldToRun(runXml) {
   }
   return runXml.replace(properties, properties.replace(/^<a:rPr\b/, '<a:rPr b="1"'));
 }
-
+ 
 function replaceUniformParagraphEmphasis(paragraphXml, ranges) {
   if (!assessParagraphEmphasisSafety(paragraphXml).safe) return null;
   const run = paragraphXml.match(/<a:r\b[\s\S]*?<\/a:r>/)?.[0];
@@ -518,12 +531,12 @@ function replaceUniformParagraphEmphasis(paragraphXml, ranges) {
   const result = paragraphXml.replace(run, replacement);
   return textFromXml(result) === originalText ? result : null;
 }
-
+ 
 export function selectApprovedProposals(proposals) {
   if (!Array.isArray(proposals)) return [];
   return proposals.filter((proposal) => proposal?.actionable !== false && proposal?.decision === "approved");
 }
-
+ 
 export function approveAllSafeProposals(proposals) {
   if (!Array.isArray(proposals)) return 0;
   let approvedCount = 0;
@@ -534,11 +547,11 @@ export function approveAllSafeProposals(proposals) {
   }
   return approvedCount;
 }
-
+ 
 function escapeXmlText(value = "") {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
+ 
 /* Applies validated AI proposals to a fresh copy of the presentation and returns
  * a downloadable Blob. The original file/bytes passed in are never mutated —
  * a new in-memory zip package is built from them. Only exact, single-paragraph
@@ -549,7 +562,7 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
   if (!Array.isArray(proposals) || !proposals.length) {
     return { blob: null, appliedCount: 0, skippedCount: 0, results: [] };
   }
-
+ 
   const sourceBytes = arrayBuffer instanceof Uint8Array
     ? arrayBuffer.slice()
     : new Uint8Array(arrayBuffer.slice(0));
@@ -560,17 +573,17 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
   if (!approved.length) {
     return { blob: null, appliedCount: 0, skippedCount: proposals.length, results };
   }
-
+ 
   const zip = await zipLibrary.loadAsync(sourceBytes);
   const bySlide = new Map();
   for (const proposal of approved) {
     if (!bySlide.has(proposal.slide)) bySlide.set(proposal.slide, []);
     bySlide.get(proposal.slide).push(proposal);
   }
-
+ 
   let appliedCount = 0;
   let skippedCount = proposals.length - approved.length;
-
+ 
   for (const [slideNumber, edits] of bySlide) {
     const path = `ppt/slides/slide${slideNumber}.xml`;
     const file = zip.file(path);
@@ -580,7 +593,7 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
       continue;
     }
     let xml = await file.async("string");
-
+ 
     for (const edit of edits) {
       const shapeMatches = [...xml.matchAll(/<p:sp\b[\s\S]*?<\/p:sp>/g)];
       let shapeXml = null;
@@ -597,7 +610,7 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
         results.push({ id: edit.id || null, status: "skipped", reason: "shape-not-found" });
         continue;
       }
-
+ 
       const paragraphs = [...shapeXml.matchAll(/<a:p\b[\s\S]*?<\/a:p>/g)];
       let applied = false;
       for (const paragraphMatch of paragraphs) {
@@ -634,17 +647,18 @@ export async function applyProposalsToPptx(arrayBuffer, proposals, zipLibrary = 
         }
       }
     }
-
+ 
     zip.file(path, xml);
   }
-
+ 
   if (!appliedCount) return { blob: null, appliedCount: 0, skippedCount, results };
-
+ 
   const blob = await zip.generateAsync({
     type: "blob",
     mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   });
   return { blob, appliedCount, skippedCount, results };
 }
-
+ 
 export { PLACEHOLDER_TEXT };
+ 
