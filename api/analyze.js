@@ -1,16 +1,16 @@
 import { proposalSchema, validateProposalResponse, validateSnapshot } from "../lib/proposals.js";
-
+ 
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 12;
 const buckets = new Map();
-
+ 
 function setSecurityHeaders(response) {
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
 }
-
+ 
 function allowOrigin(request) {
   const configured = process.env.ALLOWED_ORIGIN;
   const requestOrigin = request.headers.origin;
@@ -21,7 +21,7 @@ function allowOrigin(request) {
   const host = String(request.headers["x-forwarded-host"] || request.headers.host || "").split(",")[0].trim();
   return Boolean(host) && requestOrigin === `${protocol}://${host}`;
 }
-
+ 
 function rateLimited(request) {
   const now = Date.now();
   const key = String(request.headers["x-forwarded-for"] || request.socket?.remoteAddress || "unknown").split(",")[0];
@@ -33,12 +33,12 @@ function rateLimited(request) {
   bucket.count += 1;
   return bucket.count > MAX_REQUESTS_PER_WINDOW;
 }
-
+ 
 function bodySize(request) {
   if (typeof request.body === "string") return Buffer.byteLength(request.body);
   return Buffer.byteLength(JSON.stringify(request.body || {}));
 }
-
+ 
 function responseOutputText(payload) {
   if (typeof payload?.output_text === "string") return payload.output_text;
   if (!Array.isArray(payload?.output)) return "";
@@ -49,7 +49,7 @@ function responseOutputText(payload) {
     .map((item) => item.text)
     .join("");
 }
-
+ 
 export default async function handler(request, response) {
   setSecurityHeaders(response);
   if (request.method !== "POST") return response.status(405).json({ error: "Method not allowed." });
@@ -59,7 +59,7 @@ export default async function handler(request, response) {
   }
   if (bodySize(request) > 750_000) return response.status(413).json({ error: "Analysis request is too large." });
   if (rateLimited(request)) return response.status(429).json({ error: "Too many analysis requests. Try again shortly." });
-
+ 
   let snapshot;
   try {
     const body = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
@@ -67,7 +67,7 @@ export default async function handler(request, response) {
   } catch (error) {
     return response.status(400).json({ error: error.message });
   }
-
+ 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return response.status(503).json({
@@ -76,12 +76,14 @@ export default async function handler(request, response) {
       message: "AI analysis is not configured. Local findings are available and the presentation remains unchanged.",
     });
   }
-
+ 
   const prompt = [
     "Analyze this presentation snapshot and propose optional edits; never claim an edit was applied.",
     "Every proposal must identify an existing slide and objectId and set originalText to one complete paragraph copied exactly from that element.",
     "Use semantic judgment. Do not shorten text, emphasize opening words, resize content, or remove elements merely because of a numeric threshold.",
     "Prioritize meaningful improvements to clarity, grammar, concision, and slide-level takeaways. Ignore trailing spaces, dash styles, and other whitespace-, punctuation-, or typography-only changes.",
+    "When you do rewrite a line, keep its original punctuation style intact — do not remove or change em dashes, en dashes, or hyphens, and do not swap them for commas or periods. Only change wording, never punctuation choices.",
+    "Never change or remove font, color, size, or any other formatting when proposing a rewrite — proposedText carries only the new wording.",
     "Use proposals for wording changes. Use emphasis for meaning-based bold emphasis without changing any words.",
     "For emphasis, choose one to three exact, short phrases copied from a safeToEmphasize paragraph. Prefer key concepts, contrasts, outcomes, or actions that make the slide easier to scan.",
     "Never emphasize a title, an entire sentence, more than 40% of a paragraph, a repeated phrase, or merely the first words. Do not return both a rewrite and emphasis for the same paragraph.",
@@ -96,7 +98,7 @@ export default async function handler(request, response) {
     "Presentation snapshot:",
     JSON.stringify(snapshot),
   ].join("\n");
-
+ 
   try {
     const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
