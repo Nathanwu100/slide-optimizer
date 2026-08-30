@@ -161,7 +161,9 @@ function setRunBold(runXml, bold) {
   const properties = runPropertiesXml(runXml);
   if (!properties) {
     if (!bold) return runXml;
-    return runXml.replace(/^<a:r\b[^>]*>/, (opening) => `${opening}<a:rPr lang="en-US" b="1"/>`);
+    // No lang, no typeface, nothing but bold — anything else here would
+    // override a font the run was inheriting from its placeholder.
+    return runXml.replace(/^<a:r\b[^>]*>/, (opening) => `${opening}<a:rPr b="1"/>`);
   }
   const value = bold ? "1" : "0";
   const updated = /\bb="[^"]*"/.test(properties)
@@ -213,43 +215,113 @@ export function normalizeBoldRanges(text, ranges) {
   return kept;
 }
 
-/* Rewrites a paragraph's wording, optionally bolding phrases inside the new
- * text. Every original run property of the dominant run — typeface, size,
- * colour, spacing, hyperlink — is carried onto each new run. Leftover runs and
- * manual line breaks between the first and last text run are removed, so no
- * empty runs are left behind. */
-export function rewriteParagraphXml(paragraphXml, newText, boldRanges = []) {
+/* Builds the runs for one line of text, splitting it so the emphasised phrases
+ * sit in their own runs.
+ *
+ * When the source line is already entirely bold — coloured headings and callout
+ * text usually are — bolding a phrase inside it is invisible. In that case the
+ * emphasis is carried by *removing* bold from everything else, which is what
+ * rule 4 asks for anyway: only the key words stay heavy. */
+function buildLineRuns(donorXml, text, boldRanges, donorIsBold) {
+  const ranges = normalizeBoldRanges(text, boldRanges);
+  const segments = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    if (range.start > cursor) segments.push({ text: text.slice(cursor, range.start), bold: false });
+    segments.push({ text: text.slice(range.start, range.end), bold: true });
+    cursor = range.end;
+  }
+  if (cursor < text.length || !segments.length) segments.push({ text: text.slice(cursor), bold: false });
+
+  let failed = false;
+  const built = segments
+    .filter((segment) => segment.text.length)
+    .map((segment) => {
+      const withText = runWithText(donorXml, segment.text);
+      if (!withText) {
+        failed = true;
+        return "";
+      }
+      if (segment.bold) return setRunBold(withText, true);
+      if (donorIsBold && ranges.length) return setRunBold(withText, false);
+      return withText;
+    })
+    .join("");
+  return failed ? null : built;
+}
+
+const BULLET_CHILDREN = '<a:buFont typeface="Arial" panose="020B0604020202020204" pitchFamily="34" charset="0"/><a:buChar char="•"/>';
+// Children of <a:pPr> are schema-ordered; bullet properties must land before
+// any of these, or PowerPoint offers to "repair" the file.
+const PPR_TAIL_TAGS = /<a:tabLst\b|<a:defRPr\b|<a:extLst\b/;
+
+function paragraphPropertiesMatch(paragraphXml) {
+  const match = paragraphXml.match(/<a:pPr\b[^>]*?(?:\/>|>[\s\S]*?<\/a:pPr>)/);
+  return match ? { xml: match[0], start: match.index, end: match.index + match[0].length } : null;
+}
+
+/* Gives a paragraph a bullet, used only when one long paragraph is split into
+ * several lines. A paragraph that already has a bullet is left exactly as it is. */
+function withBullet(paragraphXml) {
+  if (/<a:bu(?:Char|AutoNum|Blip)\b/.test(paragraphXml)) return paragraphXml;
+  const properties = paragraphPropertiesMatch(paragraphXml);
+  if (!properties) {
+    return paragraphXml.replace(
+      /^<a:p\b[^>]*>/,
+      (opening) => `${opening}<a:pPr marL="285750" indent="-285750">${BULLET_CHILDREN}</a:pPr>`,
+    );
+  }
+
+  let block = properties.xml.replace(/<a:buNone\s*\/>/g, "");
+  if (block.endsWith("/>")) {
+    block = `${block.slice(0, -2)}>${BULLET_CHILDREN}</a:pPr>`;
+  } else {
+    const tail = block.search(PPR_TAIL_TAGS);
+    const insertAt = tail >= 0 ? tail : block.lastIndexOf("</a:pPr>");
+    block = splice(block, insertAt, insertAt, BULLET_CHILDREN);
+  }
+  if (!/^<a:pPr[^>]*\bmarL=/.test(block)) {
+    block = block.replace(/^<a:pPr\b/, '<a:pPr marL="285750" indent="-285750"');
+  }
+  return splice(paragraphXml, properties.start, properties.end, block);
+}
+
+/* Rewrites a paragraph as one or more lines.
+ *
+ * `lines` is [{ text, boldRanges }]. One entry replaces the paragraph in place.
+ * Several entries split it into that many paragraphs — each a clone of the
+ * original, so indentation, spacing and list level are preserved — and a bullet
+ * is added when the original had none, so a wall of prose becomes a real list.
+ *
+ * Every new run carries the complete run properties of the paragraph's dominant
+ * run: typeface, size, colour, spacing and hyperlink all survive untouched. */
+export function rewriteParagraphXml(paragraphXml, lines) {
   if (!isParagraphEditable(paragraphXml)) return null;
   const runs = textRuns(paragraphXml);
   if (!runs.length) return null;
 
+  const wanted = (Array.isArray(lines) ? lines : [lines])
+    .map((line) => (typeof line === "string"
+      ? { text: line.trim(), boldRanges: [] }
+      : { text: String(line?.text || "").trim(), boldRanges: line?.boldRanges || [] }))
+    .filter((line) => line.text);
+  if (!wanted.length) return null;
+
   const donor = dominantRun(runs);
-  // Bolding inside an already-bold line communicates nothing, so skip emphasis.
-  const ranges = runIsBold(donor.xml) ? [] : normalizeBoldRanges(newText, boldRanges);
+  const donorIsBold = runIsBold(donor.xml);
+  const split = wanted.length > 1;
 
-  const segments = [];
-  let cursor = 0;
-  for (const range of ranges) {
-    if (range.start > cursor) segments.push({ text: newText.slice(cursor, range.start), bold: false });
-    segments.push({ text: newText.slice(range.start, range.end), bold: true });
-    cursor = range.end;
-  }
-  if (cursor < newText.length || !segments.length) {
-    segments.push({ text: newText.slice(cursor), bold: false });
+  const paragraphs = [];
+  for (const line of wanted) {
+    const rebuilt = buildLineRuns(donor.xml, line.text, line.boldRanges, donorIsBold);
+    if (!rebuilt) return null;
+    let paragraph = splice(paragraphXml, runs[0].start, runs[runs.length - 1].end, rebuilt);
+    if (split) paragraph = withBullet(paragraph);
+    paragraphs.push(paragraph);
   }
 
-  const rebuilt = segments
-    .filter((segment) => segment.text.length)
-    .map((segment) => {
-      const withText = runWithText(donor.xml, segment.text);
-      if (!withText) return "";
-      return segment.bold ? setRunBold(withText, true) : withText;
-    })
-    .join("");
-  if (!rebuilt) return null;
-
-  const result = splice(paragraphXml, runs[0].start, runs[runs.length - 1].end, rebuilt);
-  return textFromXml(result) === newText ? result : null;
+  const result = paragraphs.join("");
+  return textFromXml(result) === wanted.map((line) => line.text).join("") ? result : null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -463,16 +535,31 @@ export function validateAiProposals(snapshot, proposals) {
     const objectId = String(proposal.objectId || "");
     const element = lookup.get(`${slide}:${objectId}`);
     const originalText = String(proposal.originalText || "");
-    const proposedText = String(proposal.proposedText || "").trim();
     const explanation = String(proposal.explanation || "").trim();
     const rule = Number(proposal.rule);
     const paragraph = element?.paragraphs?.find((candidate) => candidate.text === originalText);
     const key = `${slide}:${objectId}:${originalText}`;
-    if (!element || !paragraph || !originalText || !proposedText) continue;
+    if (!element || !paragraph || !originalText) continue;
     if (!Number.isInteger(rule) || rule < 1 || rule > 12) continue;
     if (seen.has(key)) continue;
-    const boldRanges = normalizeBoldRanges(proposedText, proposal.boldRanges);
-    if (proposedText === originalText && !boldRanges.length) continue;
+
+    // A proposal is one or more lines; several lines become several bullets.
+    const incoming = Array.isArray(proposal.lines) && proposal.lines.length
+      ? proposal.lines
+      : [{ text: proposal.proposedText, boldRanges: proposal.boldRanges }];
+    const lines = incoming
+      .map((line) => {
+        const text = String(line?.text || "").trim();
+        return text ? { text, boldRanges: normalizeBoldRanges(text, line?.boldRanges) } : null;
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+    if (!lines.length) continue;
+
+    const proposedText = lines.map((line) => line.text).join("\n");
+    const changesNothing = proposedText === originalText && lines.every((line) => !line.boldRanges.length);
+    if (changesNothing) continue;
+
     seen.add(key);
     validated.push({
       id: `edit-${slide}-${objectId}-${validated.length + 1}`,
@@ -481,8 +568,8 @@ export function validateAiProposals(snapshot, proposals) {
       elementName: element.name,
       elementType: element.type,
       originalText,
+      lines,
       proposedText,
-      boldRanges,
       rule,
       ruleTitle: RULE_TITLES[rule] || `Rule ${rule}`,
       explanation,
@@ -562,7 +649,10 @@ export async function applyProposalsToPptx(arrayBuffer, edits, zipLibrary = glob
         results.push({ id: edit.id || null, status: "skipped", reason: "paragraph-not-found" });
         continue;
       }
-      const rewritten = rewriteParagraphXml(located.xml, edit.proposedText, edit.boldRanges);
+      const rewritten = rewriteParagraphXml(
+        located.xml,
+        edit.lines || [{ text: edit.proposedText, boldRanges: edit.boldRanges }],
+      );
       if (!rewritten) {
         skippedCount += 1;
         results.push({ id: edit.id || null, status: "skipped", reason: "paragraph-not-rewritable" });
