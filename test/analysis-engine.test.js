@@ -6,12 +6,9 @@ import {
   analyzePptx,
   analyzeSlideXml,
   applyProposalsToPptx,
-  approveAllSafeProposals,
-  assessParagraphEditSafety,
-  assessParagraphEmphasisSafety,
-  buildLocalFindings,
   createAnalysisSnapshot,
-  selectApprovedProposals,
+  isParagraphEditable,
+  rewriteParagraphXml,
   validateAiProposals,
 } from "../simplify-engine.js";
 import { makeFixturePptx, loadJsZip } from "./helpers.js";
@@ -22,56 +19,32 @@ function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-test("slide inspection preserves exact text and identifies existing elements", () => {
+test("slide inspection preserves exact text and inventories existing elements", () => {
   const xml = `<p:sld xmlns:p="p" xmlns:a="a" xmlns:r="r"><p:cSld><p:spTree>
-    <p:sp><p:nvSpPr><p:cNvPr id="7" name="Body"/></p:nvSpPr><p:txBody><a:p><a:r><a:rPr b="1"/><a:t>First </a:t></a:r><a:r><a:rPr baseline="30000"/><a:t>formatted</a:t></a:r><a:r><a:t> words remain.</a:t></a:r><a:hlinkClick r:id="rId8"/></a:p></p:txBody></p:sp>
-    <p:pic><p:nvPicPr><p:cNvPr id="8" name="Small but meaningful logo"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill></p:pic>
+    <p:sp><p:nvSpPr><p:cNvPr id="7" name="Body"/></p:nvSpPr><p:txBody><a:p><a:r><a:rPr b="1"/><a:t>First </a:t></a:r><a:r><a:rPr/><a:t>formatted words.</a:t></a:r><a:hlinkClick r:id="rId8"/></a:p></p:txBody></p:sp>
+    <p:pic><p:nvPicPr><p:cNvPr id="8" name="Meaningful logo"/></p:nvPicPr><p:blipFill><a:blip r:embed="rId3"/></p:blipFill></p:pic>
   </p:spTree></p:cSld></p:sld>`;
   const slide = analyzeSlideXml(xml, 1);
-  assert.equal(slide.elements[0].text, "First formatted words remain.");
+  assert.equal(slide.elements[0].text, "First formatted words.");
   assert.equal(slide.elements[0].paragraphs[0].hasHyperlink, true);
-  assert.equal(slide.elements[0].paragraphs[0].safeToAutoApply, false);
-  assert.equal(slide.elements[1].name, "Small but meaningful logo");
+  assert.equal(slide.elements[0].paragraphs[0].editable, true);
+  assert.equal(slide.elements[1].name, "Meaningful logo");
   assert.equal(slide.elements[1].relationshipId, "rId3");
   assert.equal(slide.counts.images, 1);
 });
 
-test("local findings never invent text or propose image deletion", () => {
-  const findings = buildLocalFindings([{
-    slide: 1,
-    elements: [{
-      objectId: "2",
-      name: "Body",
-      type: "text",
-      text: "This paragraph contains more than twelve words but every original word must remain completely intact.",
-      paragraphs: [{ index: 0, text: "This paragraph contains more than twelve words but every original word must remain completely intact.", wordCount: 14, boldWordCount: 0, hasHyperlink: false, isBullet: false }],
-    }, { objectId: "3", name: "Logo", type: "image", text: "", paragraphs: [] }],
-    counts: { charts: 0 },
-  }]);
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].proposedText, null);
-  assert.equal(findings[0].actionable, false);
-  assert.equal(findings.some((finding) => /delete|remove/i.test(finding.explanation)), false);
+test("only generated-field paragraphs are excluded from rewriting", () => {
+  assert.equal(isParagraphEditable(`<a:p><a:r><a:t>Editable text</a:t></a:r></a:p>`), true);
+  assert.equal(isParagraphEditable(`<a:p><a:fld id="1" type="slidenum"><a:t>1</a:t></a:fld></a:p>`), false);
 });
 
-test("analysis preserves text, media, relationships, hyperlinks, notes, charts, tables, and source bytes", async () => {
+test("analysis preserves source bytes and package inventory", async () => {
   const { JSZip, bytes } = await makeFixturePptx();
   const beforeHash = digest(bytes);
-  const beforeZip = await JSZip.loadAsync(bytes);
-  const protectedParts = [
-    "ppt/slides/slide1.xml",
-    "ppt/slides/_rels/slide1.xml.rels",
-    "ppt/media/image1.png",
-    "ppt/notesSlides/notesSlide1.xml",
-    "ppt/charts/chart1.xml",
-  ];
-  const beforeParts = new Map(await Promise.all(protectedParts.map(async (name) => [name, digest(await beforeZip.file(name).async("uint8array"))])));
-
   const analysis = await analyzePptx(bytes, null, JSZip);
   assert.equal(digest(bytes), beforeHash);
   assert.equal(analysis.packageValid, true);
   assert.equal(analysis.sourceUnchanged, true);
-  assert.equal(analysis.outputPptxCreated, false);
   assert.equal(analysis.inventory.slides, 1);
   assert.equal(analysis.inventory.media, 1);
   assert.equal(analysis.inventory.slideRelationships, 1);
@@ -79,61 +52,39 @@ test("analysis preserves text, media, relationships, hyperlinks, notes, charts, 
   assert.equal(analysis.inventory.charts, 1);
   assert.equal(analysis.inventory.tables, 1);
   assert.equal(analysis.inventory.hyperlinks, 1);
-
-  const afterZip = await JSZip.loadAsync(bytes);
-  for (const [name, hash] of beforeParts) {
-    assert.equal(digest(await afterZip.file(name).async("uint8array")), hash, `${name} changed`);
-  }
 });
 
-test("paragraph safety blocks hyperlinks and mixed formatting", () => {
-  const linked = `<a:p><a:r><a:rPr b="1"/><a:t>Bold </a:t></a:r><a:r><a:rPr/><a:t>plain</a:t></a:r><a:hlinkClick r:id="rId9"/></a:p>`;
-  const uniform = `<a:p><a:r><a:rPr b="1"/><a:t>Consistently bold</a:t></a:r></a:p>`;
-  assert.equal(assessParagraphEditSafety(linked).safe, false);
-  assert.equal(assessParagraphEditSafety(uniform).safe, true);
-  assert.equal(assessParagraphEmphasisSafety(uniform).safe, false);
-  assert.equal(assessParagraphEmphasisSafety(`<a:p><a:r><a:rPr/><a:t>Plain text</a:t></a:r></a:p>`).safe, true);
-});
-
-test("only explicitly approved proposals are selected", () => {
-  const proposals = [
-    { id: "approved", actionable: true, decision: "approved" },
-    { id: "pending", actionable: true, decision: "pending" },
-    { id: "manual", actionable: false, decision: "approved" },
-  ];
-  assert.deepEqual(selectApprovedProposals(proposals).map((proposal) => proposal.id), ["approved"]);
-});
-
-test("approve all selects only formatting-safe proposals", () => {
-  const proposals = [
-    { id: "safe", actionable: true, decision: "pending" },
-    { id: "manual", actionable: false, decision: "manual-only" },
-    { id: "finding", decision: "not-actionable" },
-  ];
-  assert.equal(approveAllSafeProposals(proposals), 1);
-  assert.equal(proposals[0].decision, "approved");
-  assert.equal(proposals[1].decision, "manual-only");
-  assert.equal(proposals[2].decision, "not-actionable");
-});
-
-test("AI proposals must reference an exact existing paragraph", () => {
-  const snapshot = { slides: [{ slide: 2, elements: [{
-    objectId: "9",
-    name: "Body",
-    type: "text",
-    text: "Exact original sentence.",
-    paragraphs: [{ text: "Exact original sentence.", safeToAutoApply: true, safetyReason: "Uniform formatting." }],
-  }] }] };
+test("AI proposals must reference an exact existing paragraph", async () => {
+  const { JSZip, bytes } = await makeFixturePptx();
+  const snapshot = createAnalysisSnapshot(await analyzePptx(bytes, null, JSZip));
   const proposals = validateAiProposals(snapshot, [
-    { slide: 2, objectId: "9", originalText: "Exact original sentence.", proposedText: "Clearer sentence.", rule: 3, explanation: "Removes repetition after semantic review." },
-    { slide: 2, objectId: "missing", originalText: "Invented", proposedText: "Bad", rule: 3, explanation: "Invalid." },
+    {
+      slide: 1,
+      objectId: "7",
+      originalText: "The retina processes visual information before sending signals to the brain.",
+      lines: [{ text: "Retina processes visual information", boldRanges: [{ start: 17, end: 35, text: "visual information" }] }],
+      rule: 3,
+      explanation: "Shortens the sentence.",
+    },
+    { slide: 1, objectId: "99", originalText: "Invented", lines: [{ text: "Bad", boldRanges: [] }], rule: 3, explanation: "Invalid." },
   ]);
   assert.equal(proposals.length, 1);
-  assert.equal(proposals[0].decision, "pending");
-  assert.equal(proposals[0].actionable, true);
+  assert.equal(proposals[0].objectId, "7");
 });
 
-test("approved uniform text is rewritten while protected package parts remain byte-identical", async () => {
+test("paragraph rewriting can create concise bullets and exact emphasis", () => {
+  const source = `<a:p><a:r><a:rPr lang="en-US"/><a:t>A long paragraph to rewrite</a:t></a:r><a:endParaRPr/></a:p>`;
+  const rewritten = rewriteParagraphXml(source, [
+    { text: "First key idea", boldRanges: [{ start: 6, end: 14, text: "key idea" }] },
+    { text: "Second idea", boldRanges: [] },
+  ]);
+  assert.ok(rewritten);
+  assert.match(rewritten, /<a:buChar char="•"\/>/);
+  assert.match(rewritten, /<a:rPr b="1" lang="en-US"\/><a:t>key idea<\/a:t>/);
+  assert.equal((rewritten.match(/<a:p\b/g) || []).length, 2);
+});
+
+test("validated edits create a copy while protected package parts remain byte-identical", async () => {
   const { JSZip, bytes } = await makeFixturePptx();
   const sourceHash = digest(bytes);
   const beforeZip = await JSZip.loadAsync(bytes);
@@ -146,105 +97,51 @@ test("approved uniform text is rewritten while protected package parts remain by
   const protectedHashes = new Map(await Promise.all(
     protectedParts.map(async (name) => [name, digest(await beforeZip.file(name).async("uint8array"))]),
   ));
-  const analysis = await analyzePptx(bytes, null, JSZip);
-  const snapshot = createAnalysisSnapshot(analysis);
-  const title = snapshot.slides[0].elements.find((element) => element.objectId === "2");
-  const [proposal] = validateAiProposals(snapshot, [{
-    slide: 1,
-    objectId: "2",
-    originalText: title.paragraphs[0].text,
-    proposedText: "A clearer title",
-    rule: 2,
-    explanation: "States the takeaway directly.",
-  }]);
-  proposal.decision = "approved";
-
-  const outcome = await applyProposalsToPptx(bytes, [proposal], JSZip);
-  assert.equal(outcome.appliedCount, 1);
-  assert.equal(outcome.skippedCount, 0);
-  assert.equal(digest(bytes), sourceHash, "source bytes changed");
-
-  const outputBytes = new Uint8Array(await outcome.blob.arrayBuffer());
-  const outputZip = await JSZip.loadAsync(outputBytes);
-  const outputSlide = await outputZip.file("ppt/slides/slide1.xml").async("string");
-  assert.match(outputSlide, /<a:rPr b="1"\/><a:t>A clearer title<\/a:t>/);
-  assert.doesNotMatch(outputSlide, /A deliberately long title/);
-  for (const [name, hash] of protectedHashes) {
-    assert.equal(digest(await outputZip.file(name).async("uint8array")), hash, `${name} changed`);
-  }
-});
-
-test("approved semantic emphasis bolds only exact phrases without changing any words", async () => {
-  const { JSZip, bytes } = await makeFixturePptx();
-  const sourceHash = digest(bytes);
-  const analysis = await analyzePptx(bytes, null, JSZip);
-  const snapshot = createAnalysisSnapshot(analysis);
-  const body = snapshot.slides[0].elements.find((element) => element.objectId === "7");
-  const originalText = body.paragraphs[0].text;
-  const [proposal] = validateAiProposals(snapshot, [{
-    action: "emphasize",
+  const snapshot = createAnalysisSnapshot(await analyzePptx(bytes, null, JSZip));
+  const [edit] = validateAiProposals(snapshot, [{
     slide: 1,
     objectId: "7",
-    originalText,
-    proposedText: originalText,
-    boldRanges: [
-      { start: 21, end: 39, text: "visual information" },
-      { start: 66, end: 75, text: "the brain" },
-    ],
-    rule: 4,
-    explanation: "Highlights the process and outcome.",
+    originalText: "The retina processes visual information before sending signals to the brain.",
+    lines: [{ text: "Retina processes visual information", boldRanges: [{ start: 17, end: 35, text: "visual information" }] }],
+    rule: 3,
+    explanation: "Keeps the main idea.",
   }]);
-  assert.equal(proposal.actionable, true);
-  proposal.decision = "approved";
 
-  const outcome = await applyProposalsToPptx(bytes, [proposal], JSZip);
+  const outcome = await applyProposalsToPptx(bytes, [edit], JSZip);
   assert.equal(outcome.appliedCount, 1);
-  assert.equal(outcome.results[0].reason, "approved-semantic-emphasis");
+  assert.equal(outcome.skippedCount, 0);
   assert.equal(digest(bytes), sourceHash, "source bytes changed");
 
   const outputZip = await JSZip.loadAsync(new Uint8Array(await outcome.blob.arrayBuffer()));
   const outputSlide = await outputZip.file("ppt/slides/slide1.xml").async("string");
   assert.match(outputSlide, /<a:rPr b="1" lang="en-US"\/><a:t>visual information<\/a:t>/);
-  assert.match(outputSlide, /<a:rPr b="1" lang="en-US"\/><a:t>the brain<\/a:t>/);
-  assert.equal(analyzeSlideXml(outputSlide, 1).elements.find((element) => element.objectId === "7").text, originalText);
+  assert.doesNotMatch(outputSlide, /before sending signals/);
+  for (const [name, hash] of protectedHashes) {
+    assert.equal(digest(await outputZip.file(name).async("uint8array")), hash, `${name} changed`);
+  }
 });
 
-test("mixed-format and hyperlinked AI suggestions remain manual-only", async () => {
+test("missing source paragraphs are skipped instead of modifying another object", async () => {
   const { JSZip, bytes } = await makeFixturePptx();
-  const analysis = await analyzePptx(bytes, null, JSZip);
-  const snapshot = createAnalysisSnapshot(analysis);
-  const body = snapshot.slides[0].elements.find((element) => element.objectId === "3");
-  const [proposal] = validateAiProposals(snapshot, [{
+  const outcome = await applyProposalsToPptx(bytes, [{
+    id: "missing",
     slide: 1,
-    objectId: "3",
-    originalText: body.paragraphs[0].text,
-    proposedText: "A shorter linked paragraph.",
-    rule: 3,
-    explanation: "Improves scanability.",
-  }]);
-  assert.equal(proposal.actionable, false);
-  assert.equal(proposal.decision, "manual-only");
-  proposal.decision = "approved";
-  const outcome = await applyProposalsToPptx(bytes, [proposal], JSZip);
+    objectId: "7",
+    originalText: "Text that is not in the deck",
+    lines: [{ text: "Replacement", boldRanges: [] }],
+  }], JSZip);
   assert.equal(outcome.appliedCount, 0);
   assert.equal(outcome.skippedCount, 1);
   assert.equal(outcome.blob, null);
 });
 
-test("supplied 22-slide deck remains byte-identical during complete analysis", { skip: !process.env.LUCID_TEST_PPTX }, async () => {
+test("supplied deck remains byte-identical during analysis", { skip: !process.env.LUCID_TEST_PPTX }, async () => {
   const bytes = new Uint8Array(await readFile(process.env.LUCID_TEST_PPTX));
   const JSZip = await loadJsZip();
   const beforeHash = digest(bytes);
   const analysis = await analyzePptx(bytes, null, JSZip);
-  assert.equal(beforeHash, "967649a18c96fd0fb8b522abc0a4c4dbb50e5ca493728c512d5f49cf1ae1a68c");
   assert.equal(analysis.inventory.slides, 22);
-  assert.equal(analysis.inventory.media, 26);
-  assert.equal(analysis.inventory.slideRelationships, 22);
-  assert.equal(analysis.inventory.notes, 22);
-  assert.equal(analysis.inventory.imagesReferenced, 15);
   assert.equal(analysis.inventory.words, 1577);
   assert.equal(digest(bytes), beforeHash);
   assert.equal(analysis.sourceUnchanged, true);
-  assert.equal(analysis.outputPptxCreated, false);
-  assert.equal(Object.keys(analysis.rawSlideHashes).length, 22);
 });

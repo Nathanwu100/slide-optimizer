@@ -40,6 +40,45 @@ let currentReportUrl = "";
 let currentPptxUrl = "";
 let currentResult = null;
 
+function randomUsageId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  globalThis.crypto?.getRandomValues?.(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("") || `${Date.now()}${Math.random()}`.replace(/\D/g, "").padEnd(16, "0");
+}
+
+function anonymousUsageId() {
+  const key = "lucid-slides-anonymous-usage-id";
+  try {
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const created = randomUsageId();
+    localStorage.setItem(key, created);
+    return created;
+  } catch {
+    return randomUsageId();
+  }
+}
+
+async function recordSuccessfulConversion({ eventId, slidesProcessed, slidesChanged, changesApplied }) {
+  try {
+    await fetch("/api/usage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Lucid-Request": "usage-v1" },
+      body: JSON.stringify({
+        eventId,
+        anonymousId: anonymousUsageId(),
+        slidesProcessed,
+        slidesChanged,
+        changesApplied,
+      }),
+      keepalive: true,
+    });
+  } catch {
+    // Analytics must never interrupt presentation processing or downloading.
+  }
+}
+
 function resetPanels() {
   processingBox.style.display = "none";
   processingBox.replaceChildren();
@@ -236,6 +275,7 @@ async function handleFile(file) {
   }
 
   try {
+    const conversionEventId = randomUsageId();
     logLine(`Reading ${file.name}…`);
     const arrayBuffer = await file.arrayBuffer();
     const analysis = await analyzePptx(arrayBuffer, logLine);
@@ -257,6 +297,13 @@ async function handleFile(file) {
       pptxDownload.style.display = "inline-block";
       resultTitle.textContent = "Your simplified presentation is ready.";
       resultSummary.textContent = `${generation.appliedCount} line${generation.appliedCount === 1 ? " was" : "s were"} rewritten across ${analysis.inventory.slides} slides. Fonts, colours, images, charts and layout are unchanged, and your original file is untouched.`;
+      const slidesChanged = new Set(edits.filter((edit) => edit.applicationStatus === "applied").map((edit) => edit.slide)).size;
+      void recordSuccessfulConversion({
+        eventId: conversionEventId,
+        slidesProcessed: analysis.inventory.slides,
+        slidesChanged,
+        changesApplied: generation.appliedCount,
+      });
     } else {
       resultTitle.textContent = "Nothing was changed.";
       resultSummary.textContent = `${analysis.inventory.slides} slides and ${analysis.inventory.words.toLocaleString()} words were reviewed, but no line needed rewriting.`;
