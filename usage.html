@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Lucid Slides — Usage</title>
+  <style>
+    :root{color-scheme:light;--blue:#3598d5;--ink:#1d1d1d;--muted:#666;--line:#ddd8cf;--paper:#fff;--bg:#f4f1eb}
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Georgia,"Times New Roman",serif}
+    main{max-width:920px;margin:0 auto;padding:56px 24px 80px} h1{font-size:2.4rem;margin:0 0 8px} .lead{color:var(--muted);margin:0 0 30px;line-height:1.5}
+    .login,.panel{background:var(--paper);border:1px solid var(--line);padding:24px;box-shadow:0 8px 28px rgba(0,0,0,.06)}
+    form{display:flex;gap:10px;align-items:end} label{display:grid;gap:7px;flex:1;font-weight:700} input{font:inherit;padding:11px;border:1px solid #aaa;min-width:0}
+    button{border:0;background:var(--blue);color:#fff;padding:12px 18px;font:700 1rem Georgia,"Times New Roman",serif;cursor:pointer} button:disabled{opacity:.55}
+    #message{min-height:1.4em;color:#a12424;margin:12px 0 0}#dashboardMessage{color:#a12424}.panel{display:none}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+    .metric{border-top:4px solid var(--blue);background:#f8fbfd;padding:18px}.metric strong{display:block;font-size:2rem}.metric span{color:var(--muted);line-height:1.35}
+    h2{margin:30px 0 14px}.meta{color:var(--muted);line-height:1.6}.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+    .toolbar button{background:#333;font-size:.9rem;padding:9px 14px}.privacy{border-left:4px solid var(--blue);padding:12px 16px;background:#eef7fc;margin-top:26px;line-height:1.5}
+    @media(max-width:700px){form{display:grid}.metrics{grid-template-columns:1fr 1fr}} @media(max-width:440px){.metrics{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Lucid Slides usage</h1>
+    <p class="lead">Private conversion totals for the project owner.</p>
+
+    <section class="login" id="loginPanel">
+      <form id="usageForm">
+        <label>Dashboard token
+          <input id="token" type="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">View usage</button>
+      </form>
+      <p id="message" role="alert"></p>
+    </section>
+
+    <section class="panel" id="usagePanel">
+      <div class="toolbar"><strong>All-time totals</strong><button type="button" id="refresh">Refresh</button></div>
+      <p id="dashboardMessage" role="alert"></p>
+      <div class="metrics">
+        <div class="metric"><strong id="presentations">0</strong><span>presentations converted</span></div>
+        <div class="metric"><strong id="slidesProcessed">0</strong><span>slides processed in converted decks</span></div>
+        <div class="metric"><strong id="slidesChanged">0</strong><span>distinct slides actually changed</span></div>
+        <div class="metric"><strong id="changesApplied">0</strong><span>text changes applied</span></div>
+        <div class="metric"><strong id="uniqueDevices">0</strong><span>approximate unique browsers</span></div>
+      </div>
+      <h2>Today</h2>
+      <p class="meta" id="today"></p>
+      <p class="meta" id="lastConversion"></p>
+      <p class="privacy">The tracker stores only anonymous counters and a random browser identifier. It never stores filenames, slide text, presentation files, names, or email addresses.</p>
+    </section>
+  </main>
+  <script type="module">
+    const form = document.getElementById("usageForm");
+    const tokenInput = document.getElementById("token");
+    const message = document.getElementById("message");
+    const loginPanel = document.getElementById("loginPanel");
+    const usagePanel = document.getElementById("usagePanel");
+    const dashboardMessage = document.getElementById("dashboardMessage");
+    let dashboardToken = "";
+
+    function number(value){return Number(value || 0).toLocaleString()}
+    async function loadUsage(){
+      message.textContent = "";
+      dashboardMessage.textContent = "";
+      const response = await fetch("/api/usage", {headers:{"X-Usage-Admin-Token":dashboardToken}});
+      const data = await response.json().catch(() => ({}));
+      if(!response.ok) throw new Error(data.error || "Usage could not be loaded.");
+      document.getElementById("presentations").textContent = number(data.totals.presentationsConverted);
+      document.getElementById("slidesProcessed").textContent = number(data.totals.slidesProcessed);
+      document.getElementById("slidesChanged").textContent = number(data.totals.slidesChanged);
+      document.getElementById("changesApplied").textContent = number(data.totals.changesApplied);
+      document.getElementById("uniqueDevices").textContent = number(data.totals.approximateUniqueDevices);
+      document.getElementById("today").textContent = `${data.today.date}: ${number(data.today.presentationsConverted)} presentations, ${number(data.today.slidesProcessed)} slides processed, and ${number(data.today.slidesChanged)} slides changed.`;
+      document.getElementById("lastConversion").textContent = data.lastConversionAt ? `Last conversion: ${new Date(data.lastConversionAt).toLocaleString()}` : "No conversions recorded yet.";
+      loginPanel.style.display = "none";
+      usagePanel.style.display = "block";
+    }
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      dashboardToken = tokenInput.value;
+      try { await loadUsage(); } catch (error) { message.textContent = error.message; }
+    });
+    document.getElementById("refresh").addEventListener("click", () => loadUsage().catch((error) => { dashboardMessage.textContent = error.message; }));
+  </script>
+</body>
+</html>

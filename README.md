@@ -28,6 +28,12 @@ If `OPENAI_API_KEY` is absent, the endpoint returns a clearly labeled `analysis-
 
 Environment variables are documented in `.env.example`.
 
+## Private usage tracker
+
+When an Upstash Redis database is connected, successful downloadable conversions record anonymous aggregate counters through `/api/usage`. The tracker counts presentations converted, slides processed, distinct slides changed, changes applied, and approximate unique browsers. It never sends filenames, slide text, or presentation files.
+
+Set `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, and a private `USAGE_ADMIN_TOKEN`, then open `/usage` and enter the dashboard token. Repeated delivery of the same conversion event is deduplicated for 30 days. If storage is missing or temporarily unavailable, conversion and downloading continue normally.
+
 ## Run locally
 
 ```bash
