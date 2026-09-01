@@ -18,6 +18,12 @@ The repaired workflow:
 8. Creates a new `.pptx` only after the user approves at least one safe proposal.
 9. Revalidates approvals inside the writer and changes only an exact matching paragraph in an exact matching shape.
 
+Dense-line coverage is enforced. The backend retries any body line over 10 words
+or title over 8 words that the model omits. If a required line is still missing
+after two focused retries, the request fails without creating a partial deck.
+Text buried after extreme blank-paragraph spacing is reported as a manual item
+instead of being counted as a visible change.
+
 The original file is never modified. Untouched PowerPoint package parts, including media, relationships, notes, charts, and tables, are preserved. The writer refuses unapproved changes and paragraphs whose formatting cannot be preserved conservatively.
 
 ## Optional OpenAI analysis
