@@ -38,21 +38,6 @@ test("only generated-field paragraphs are excluded from rewriting", () => {
   assert.equal(isParagraphEditable(`<a:p><a:fld id="1" type="slidenum"><a:t>1</a:t></a:fld></a:p>`), false);
 });
 
-test("text buried after extreme blank spacing is not treated as a visible editable line", () => {
-  const blanks = "<a:p><a:endParaRPr/></a:p>".repeat(25);
-  const xml = `<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>
-    <p:sp><p:nvSpPr><p:cNvPr id="11" name="Buried caption"/></p:nvSpPr><p:txBody>
-      <a:p><a:r><a:t>Visible citation</a:t></a:r></a:p>${blanks}
-      <a:p><a:r><a:t>This long caption is pushed beyond the visible slide by blank paragraphs.</a:t></a:r></a:p>
-    </p:txBody></p:sp>
-  </p:spTree></p:cSld></p:sld>`;
-  const slide = analyzeSlideXml(xml, 11);
-  assert.equal(slide.elements[0].paragraphs[0].editable, true);
-  assert.equal(slide.elements[0].paragraphs[1].hiddenBySpacing, true);
-  assert.equal(slide.elements[0].paragraphs[1].editable, false);
-  assert.equal(slide.counts.hiddenParagraphs, 1);
-});
-
 test("analysis preserves source bytes and package inventory", async () => {
   const { JSZip, bytes } = await makeFixturePptx();
   const beforeHash = digest(bytes);
@@ -157,10 +142,6 @@ test("supplied deck remains byte-identical during analysis", { skip: !process.en
   const analysis = await analyzePptx(bytes, null, JSZip);
   assert.equal(analysis.inventory.slides, 22);
   assert.equal(analysis.inventory.words, 1577);
-  assert.equal(analysis.inventory.hiddenParagraphs, 1);
-  const slideElevenSnapshot = createAnalysisSnapshot(analysis).slides.find((slide) => slide.slide === 11);
-  assert.ok(slideElevenSnapshot);
-  assert.equal(slideElevenSnapshot.elements.flatMap((element) => element.paragraphs).some((paragraph) => paragraph.text.includes("process of dark adaptation")), false);
   assert.equal(digest(bytes), beforeHash);
   assert.equal(analysis.sourceUnchanged, true);
 });

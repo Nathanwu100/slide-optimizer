@@ -1,10 +1,4 @@
-import {
-  missingRequiredRewriteTargets,
-  proposalSchema,
-  requiredRewriteTargets,
-  validateProposalResponse,
-  validateSnapshot,
-} from "../lib/proposals.js";
+import { proposalSchema, validateProposalResponse, validateSnapshot } from "../lib/proposals.js";
 import { ruleGuidanceText } from "../lib/rules.js";
 
 const WINDOW_MS = 60_000;
@@ -12,8 +6,6 @@ const MAX_REQUESTS_PER_WINDOW = 12;
 const SLIDES_PER_BATCH = 8;
 const MAX_CONCURRENT_BATCHES = 3;
 const MAX_OUTPUT_TOKENS = 16_000;
-const COVERAGE_RETRY_PASSES = 2;
-const COVERAGE_TARGETS_PER_BATCH = 24;
 const buckets = new Map();
 
 /* Tried in order. A model the account cannot reach falls through to the next
@@ -77,7 +69,7 @@ function responseOutputText(payload) {
     .join("");
 }
 
-function buildPrompt(batch, { coverageRetry = false } = {}) {
+function buildPrompt(batch) {
   return [
     "You rewrite presentation slides so a reader with ADHD can take them in at a glance.",
     "",
@@ -91,9 +83,6 @@ function buildPrompt(batch, { coverageRetry = false } = {}) {
     "- Go through EVERY paragraph in the snapshot, slide by slide, in order.",
     "- Return a proposal for every paragraph that is longer, denser, or more abstract than it needs to be. On a typical deck that is most of the body text, not one or two lines.",
     "- Skip a paragraph only when it is already short, plain and concrete, and no emphasis would help.",
-    coverageRetry
-      ? "- COVERAGE RETRY: every paragraph in this snapshot was flagged as dense. Return exactly one rewrite proposal for every paragraph; do not omit any."
-      : "",
     "",
     "GIVE THE TEXT STRUCTURE. Each proposal is a list of `lines`:",
     "- A dense paragraph that contains two, three or four separate points becomes two, three or four lines — one point each. They are written back into the slide as separate bullets. This is the preferred outcome for any body paragraph longer than about 15 words.",
@@ -127,11 +116,11 @@ function buildPrompt(batch, { coverageRetry = false } = {}) {
   ].join("\n");
 }
 
-async function callOpenAi(apiKey, model, batch, options = {}) {
+async function callOpenAi(apiKey, model, batch) {
   const request = {
     model,
     instructions: "You return only valid JSON matching the supplied schema.",
-    input: buildPrompt(batch, options),
+    input: buildPrompt(batch),
     max_output_tokens: MAX_OUTPUT_TOKENS,
     store: false,
     text: {
@@ -165,12 +154,12 @@ function isModelProblem(status, payload) {
 
 /* Runs one batch of slides, walking the model candidates until one answers.
  * Returns { proposals, error } — a failed batch never fails the whole deck. */
-async function analyzeBatch(apiKey, batch, state, options = {}) {
+async function analyzeBatch(apiKey, batch, state) {
   const candidates = state.model ? [state.model] : modelCandidates();
   let lastError = "The analysis service was unavailable.";
 
   for (const model of candidates) {
-    const { ok, status, payload } = await callOpenAi(apiKey, model, batch, options);
+    const { ok, status, payload } = await callOpenAi(apiKey, model, batch);
 
     if (!ok) {
       if (isModelProblem(status, payload) && !state.model) {
@@ -205,31 +194,6 @@ function chunkSlides(snapshot) {
   const batches = [];
   for (let index = 0; index < snapshot.slides.length; index += SLIDES_PER_BATCH) {
     batches.push({ slides: snapshot.slides.slice(index, index + SLIDES_PER_BATCH) });
-  }
-  return batches;
-}
-
-function snapshotForTargets(snapshot, targets) {
-  const wanted = new Set(targets.map((target) => target.key));
-  const slides = [];
-  for (const slide of snapshot.slides) {
-    const elements = [];
-    for (const element of slide.elements) {
-      const paragraphs = element.paragraphs.filter((paragraph) => (
-        wanted.has(`${slide.slide}:${element.objectId}:${paragraph.text}`)
-      ));
-      if (!paragraphs.length) continue;
-      elements.push({ ...element, text: paragraphs.map((paragraph) => paragraph.text).join("\n"), paragraphs });
-    }
-    if (elements.length) slides.push({ slide: slide.slide, elements });
-  }
-  return { slides };
-}
-
-function chunkCoverageTargets(snapshot, targets) {
-  const batches = [];
-  for (let index = 0; index < targets.length; index += COVERAGE_TARGETS_PER_BATCH) {
-    batches.push(snapshotForTargets(snapshot, targets.slice(index, index + COVERAGE_TARGETS_PER_BATCH)));
   }
   return batches;
 }
@@ -280,41 +244,15 @@ export default async function handler(request, response) {
     const outcomes = await runWithConcurrency(batches, MAX_CONCURRENT_BATCHES, (batch) => analyzeBatch(apiKey, batch, state));
 
     const rawProposals = outcomes.flatMap((outcome) => outcome.proposals);
-    const allErrors = outcomes.map((outcome) => outcome.error).filter(Boolean);
+    const errors = [...new Set(outcomes.map((outcome) => outcome.error).filter(Boolean))];
 
     // Every batch failed and nothing came back — surface the real reason.
-    if (!rawProposals.length && allErrors.length === outcomes.length) {
-      return response.status(502).json({ error: allErrors[0], proposals: [] });
+    if (!rawProposals.length && errors.length === outcomes.length) {
+      return response.status(502).json({ error: errors[0], proposals: [] });
     }
 
-    let proposals = validateProposalResponse(snapshot, { proposals: rawProposals });
-    const requiredTargets = requiredRewriteTargets(snapshot);
-    let missingTargets = missingRequiredRewriteTargets(snapshot, proposals);
-
-    for (let pass = 0; pass < COVERAGE_RETRY_PASSES && missingTargets.length; pass += 1) {
-      const retryBatches = chunkCoverageTargets(snapshot, missingTargets);
-      const retryOutcomes = await runWithConcurrency(
-        retryBatches,
-        MAX_CONCURRENT_BATCHES,
-        (batch) => analyzeBatch(apiKey, batch, state, { coverageRetry: true }),
-      );
-      rawProposals.push(...retryOutcomes.flatMap((outcome) => outcome.proposals));
-      allErrors.push(...retryOutcomes.map((outcome) => outcome.error).filter(Boolean));
-      proposals = validateProposalResponse(snapshot, { proposals: rawProposals });
-      missingTargets = missingRequiredRewriteTargets(snapshot, proposals);
-    }
-
-    if (missingTargets.length) {
-      const affectedSlides = [...new Set(missingTargets.map((target) => target.slide))].sort((a, b) => a - b);
-      return response.status(502).json({
-        error: `Coverage check stopped a partial conversion: ${missingTargets.length} dense line${missingTargets.length === 1 ? " was" : "s were"} omitted on slide${affectedSlides.length === 1 ? "" : "s"} ${affectedSlides.join(", ")}. Please try again.`,
-        proposals: [],
-        coverage: { required: requiredTargets.length, satisfied: requiredTargets.length - missingTargets.length },
-      });
-    }
-
-    const errors = [...new Set(allErrors)];
-    const partial = errors.length ? ` ${errors.length} analysis attempt${errors.length === 1 ? "" : "s"} needed a retry.` : "";
+    const proposals = validateProposalResponse(snapshot, { proposals: rawProposals });
+    const partial = errors.length ? ` ${errors.length} of ${batches.length} slide batches could not be analysed.` : "";
 
     return response.status(200).json({
       mode: "auto-simplify",
@@ -324,7 +262,6 @@ export default async function handler(request, response) {
         ? `${proposals.length} slide line${proposals.length === 1 ? "" : "s"} simplified.${partial}`
         : `No lines needed simplifying.${partial}`,
       warnings: errors,
-      coverage: { required: requiredTargets.length, satisfied: requiredTargets.length },
     });
   } catch (error) {
     console.error("OpenAI analysis failed", error);

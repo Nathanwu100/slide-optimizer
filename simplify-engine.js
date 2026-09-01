@@ -3,11 +3,12 @@
  * Contract:
  * - The original file/bytes passed in are never mutated in place; every edit is
  *   written into a fresh in-memory copy of the package.
- * - Visible paragraphs that contain real text runs are editable. Mixed
- *   formatting, multiple runs, hyperlinks and manual line breaks are rewritten
- *   using the paragraph's dominant run as the style template.
- * - Generated fields and text buried after extreme blank-paragraph spacing are
- *   excluded because changing them cannot create a visible, trustworthy edit.
+ * - Every paragraph that contains real text runs is editable. There is no
+ *   "safe/unsafe" split: mixed formatting, multiple runs, hyperlinks and manual
+ *   line breaks are all rewritten, using the paragraph's dominant run as the
+ *   style template so the original typeface, size and colour are carried over.
+ * - Only generated-field paragraphs (slide numbers, dates) are left alone,
+ *   because rewriting them is meaningless rather than unsafe.
  */
 
 import { RULE_TITLES } from "./lib/rules.js";
@@ -15,7 +16,6 @@ import { RULE_TITLES } from "./lib/rules.js";
 const SLIDE_PATH = /^ppt\/slides\/slide(\d+)\.xml$/;
 const REQUIRED_PARTS = ["[Content_Types].xml", "_rels/.rels", "ppt/presentation.xml"];
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g;
-const HIDDEN_SPACER_PARAGRAPHS = 24;
 
 /* ------------------------------------------------------------------ *
  * XML helpers
@@ -353,30 +353,19 @@ export function analyzeSlideXml(xml, slideNumber) {
     const name = readAttribute(nonVisual, "name") || `${found.kind} ${objectId}`;
     const paragraphs = [];
     let paragraphIndex = 0;
-    let sourceParagraphIndex = 0;
-    let consecutiveBlankParagraphs = 0;
     for (const paragraph of paragraphMatches(elementXml)) {
       const text = textFromXml(paragraph.xml);
-      if (!text.trim()) {
-        consecutiveBlankParagraphs += 1;
-        sourceParagraphIndex += 1;
-        continue;
-      }
-      const hiddenBySpacing = consecutiveBlankParagraphs >= HIDDEN_SPACER_PARAGRAPHS;
+      if (!text.trim()) continue;
       paragraphs.push({
         index: paragraphIndex,
-        sourceIndex: sourceParagraphIndex,
         text,
         wordCount: wordCount(text),
         boldWordCount: boldWordCount(paragraph.xml),
         hasHyperlink: /<a:hlinkClick\b/.test(paragraph.xml),
         isBullet: /<a:bu(?:Char|AutoNum|Blip)\b/.test(paragraph.xml),
-        hiddenBySpacing,
-        editable: isParagraphEditable(paragraph.xml) && !hiddenBySpacing,
+        editable: isParagraphEditable(paragraph.xml),
       });
       paragraphIndex += 1;
-      sourceParagraphIndex += 1;
-      consecutiveBlankParagraphs = 0;
     }
     const blip = elementXml.match(/<a:blip\b[^>]*>/)?.[0] || "";
     elements.push({
@@ -405,10 +394,6 @@ export function analyzeSlideXml(xml, slideNumber) {
         (sum, element) => sum + element.paragraphs.filter((paragraph) => paragraph.editable).length,
         0,
       ),
-      hiddenParagraphs: elements.reduce(
-        (sum, element) => sum + element.paragraphs.filter((paragraph) => paragraph.hiddenBySpacing).length,
-        0,
-      ),
       words: elements.reduce((sum, element) => sum + wordCount(element.text), 0),
     },
   };
@@ -435,13 +420,6 @@ export function buildManualNotes(slides) {
         slide: slide.slide,
         rule: 8,
         note: "Chart data and styling were preserved. Check that its caption states the conclusion.",
-      });
-    }
-    if (slide.counts.hiddenParagraphs) {
-      notes.push({
-        slide: slide.slide,
-        rule: 3,
-        note: `${slide.counts.hiddenParagraphs} text line${slide.counts.hiddenParagraphs === 1 ? " is" : "s are"} buried after extreme blank spacing and was excluded because rewriting it would not be visible on the slide.`,
       });
     }
   }
@@ -506,7 +484,6 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     hyperlinks: slides.reduce((sum, slide) => sum + slide.counts.hyperlinks, 0),
     imagesReferenced: slides.reduce((sum, slide) => sum + slide.counts.images, 0),
     editableParagraphs: slides.reduce((sum, slide) => sum + slide.counts.editableParagraphs, 0),
-    hiddenParagraphs: slides.reduce((sum, slide) => sum + slide.counts.hiddenParagraphs, 0),
     words: slides.reduce((sum, slide) => sum + slide.counts.words, 0),
   };
 

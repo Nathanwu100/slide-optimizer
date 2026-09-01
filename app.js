@@ -296,9 +296,8 @@ async function handleFile(file) {
       pptxDownload.download = `${file.name.replace(/\.pptx$/i, "")} (simplified).pptx`;
       pptxDownload.style.display = "inline-block";
       resultTitle.textContent = "Your simplified presentation is ready.";
+      resultSummary.textContent = `${generation.appliedCount} line${generation.appliedCount === 1 ? " was" : "s were"} rewritten across ${analysis.inventory.slides} slides. Fonts, colours, images, charts and layout are unchanged, and your original file is untouched.`;
       const slidesChanged = new Set(edits.filter((edit) => edit.applicationStatus === "applied").map((edit) => edit.slide)).size;
-      const slidesAlreadyConcise = Math.max(0, analysis.inventory.slides - slidesChanged);
-      resultSummary.textContent = `${generation.appliedCount} line${generation.appliedCount === 1 ? " was" : "s were"} rewritten on ${slidesChanged} of ${analysis.inventory.slides} slides. The other ${slidesAlreadyConcise} slide${slidesAlreadyConcise === 1 ? " was" : "s were"} already concise or contained no visible editable text. Fonts, colours, images, charts and layout are unchanged, and your original file is untouched.`;
       void recordSuccessfulConversion({
         eventId: conversionEventId,
         slidesProcessed: analysis.inventory.slides,
@@ -312,7 +311,6 @@ async function handleFile(file) {
 
     modeNotice.textContent = warnings.length ? `${message} ${warnings.join(" ")}` : message;
     appendInventory("slides reviewed", analysis.inventory.slides);
-    appendInventory("slides changed", new Set(edits.filter((edit) => edit.applicationStatus === "applied").map((edit) => edit.slide)).size);
     appendInventory("lines rewritten", generation.appliedCount);
     appendInventory("images preserved", analysis.inventory.media);
     appendInventory("charts preserved", analysis.inventory.charts);
