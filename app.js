@@ -33,7 +33,7 @@ for (const [id, element] of Object.entries({
   pptxDownload,
   reportDownload,
 })) {
-  if (!element) console.error(`Lucid Slides: #${id} is missing. The page and application files may not match.`);
+  if (!element) console.error(`SimplifyYourSlides: #${id} is missing. The page and application files may not match.`);
 }
 
 /* Sends one usage event to Google Analytics, if it loaded at all.
@@ -221,7 +221,7 @@ function updateReportDownload() {
   if (currentReportUrl) URL.revokeObjectURL(currentReportUrl);
   currentReportUrl = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
   reportDownload.href = currentReportUrl;
-  reportDownload.download = `${currentResult.fileName.replace(/\.pptx$/i, "")} — Lucid Slides summary.json`;
+  reportDownload.download = `${currentResult.fileName.replace(/\.pptx$/i, "")} — SimplifyYourSlides summary.json`;
 }
 
 async function requestSimplifications(analysis) {
@@ -318,7 +318,7 @@ async function handleFile(file) {
     processingBox.style.display = "none";
     // Without this you only learn about real-world failures if someone tells you.
     track("simplify_failed", { reason: String(error.message || "unknown").slice(0, 100) });
-    showError(`Lucid Slides could not simplify that file: ${error.message}`);
+    showError(`SimplifyYourSlides could not simplify that file: ${error.message}`);
   }
 }
 

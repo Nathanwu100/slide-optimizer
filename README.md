@@ -1,6 +1,6 @@
-# Lucid Slides
+# SimplifyYourSlides
 
-Lucid Slides is a browser-based PowerPoint clarity reviewer. It analyzes a local `.pptx`, shows meaning-based AI suggestions, and can create a new copy from explicitly approved, formatting-safe text changes.
+SimplifyYourSlides is a browser-based PowerPoint clarity reviewer. It analyzes a local `.pptx`, shows meaning-based AI suggestions, and can create a new copy from explicitly approved, formatting-safe text changes.
 
 ## Safety status
 
@@ -58,4 +58,4 @@ The real-deck regression confirms 22 slides are inspected and the source bytes r
 
 ## Known platform limitation
 
-Arbitrary PowerPoint editing remains intentionally unsupported. Lucid Slides does not resize objects, delete elements, change charts, alter animations, or rewrite mixed-format/hyperlinked paragraphs. Those cases are reported for manual PowerPoint review.
+Arbitrary PowerPoint editing remains intentionally unsupported. SimplifyYourSlides does not resize objects, delete elements, change charts, alter animations, or rewrite mixed-format/hyperlinked paragraphs. Those cases are reported for manual PowerPoint review.
