@@ -1,4 +1,4 @@
-/* Lucid Slides — PPTX analysis and simplification engine.
+/* SimplifyYourSlides — PPTX analysis and simplification engine.
  *
  * Contract:
  * - The original file/bytes passed in are never mutated in place; every edit is
