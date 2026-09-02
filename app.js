@@ -36,6 +36,19 @@ for (const [id, element] of Object.entries({
   if (!element) console.error(`Lucid Slides: #${id} is missing. The page and application files may not match.`);
 }
 
+/* Sends one usage event to Google Analytics, if it loaded at all.
+ *
+ * Counts only — never a file name, never slide text. Analytics is blocked for a
+ * good share of visitors and must never be able to break the app, so every call
+ * is guarded and failures are swallowed. */
+function track(name, data = {}) {
+  try {
+    if (typeof window.gtag === "function") window.gtag("event", name, data);
+  } catch {
+    // Analytics is never worth an error in front of the user.
+  }
+}
+
 let currentReportUrl = "";
 let currentPptxUrl = "";
 let currentResult = null;
@@ -232,6 +245,7 @@ async function handleFile(file) {
   resetPanels();
   if (!file) return;
   if (!file.name.toLowerCase().endsWith(".pptx")) {
+    track("wrong_file_type");
     showError("Choose a .pptx file. Your original presentation is never modified.");
     return;
   }
@@ -240,6 +254,12 @@ async function handleFile(file) {
     logLine(`Reading ${file.name}…`);
     const arrayBuffer = await file.arrayBuffer();
     const analysis = await analyzePptx(arrayBuffer, logLine);
+
+    track("deck_uploaded", {
+      slides: analysis.inventory.slides,
+      words: analysis.inventory.words,
+      eligible_lines: analysis.inventory.editableParagraphs,
+    });
 
     logLine(`Simplifying ${analysis.inventory.editableParagraphs} lines across ${analysis.inventory.slides} slides…`);
     const { edits, message, warnings, coverage } = await requestSimplifications(analysis);
@@ -250,6 +270,17 @@ async function handleFile(file) {
     for (const edit of edits) edit.applicationStatus = statusById.get(edit.id) || "skipped";
 
     currentResult = { fileName: file.name, analysis, items: edits, generation };
+
+    track("deck_simplified", {
+      slides: analysis.inventory.slides,
+      lines_rewritten: generation.appliedCount,
+      eligible_lines: coverage ? coverage.editableParagraphs : analysis.inventory.editableParagraphs,
+      // How much of the deck the run actually reached — the number worth watching.
+      coverage_percent: coverage && coverage.editableParagraphs
+        ? Math.round((generation.appliedCount / coverage.editableParagraphs) * 100)
+        : 0,
+      partial_run: warnings.length > 0,
+    });
 
     if (generation.blob && generation.appliedCount) {
       currentPptxUrl = URL.createObjectURL(generation.blob);
@@ -285,9 +316,16 @@ async function handleFile(file) {
   } catch (error) {
     console.error(error);
     processingBox.style.display = "none";
+    // Without this you only learn about real-world failures if someone tells you.
+    track("simplify_failed", { reason: String(error.message || "unknown").slice(0, 100) });
     showError(`Lucid Slides could not simplify that file: ${error.message}`);
   }
 }
+
+pptxDownload.addEventListener("click", () => {
+  track("download_clicked", { lines_rewritten: currentResult?.generation?.appliedCount || 0 });
+});
+reportDownload.addEventListener("click", () => track("report_downloaded"));
 
 dropzone.addEventListener("click", () => fileInput.click());
 dropzone.addEventListener("keydown", (event) => {
