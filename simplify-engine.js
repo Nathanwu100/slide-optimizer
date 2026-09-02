@@ -1,4 +1,4 @@
-/* SimplifyYourSlides — PPTX analysis and simplification engine.
+/* Lucid Slides — PPTX analysis and simplification engine.
  *
  * Contract:
  * - The original file/bytes passed in are never mutated in place; every edit is
@@ -250,7 +250,9 @@ function buildLineRuns(donorXml, text, boldRanges, donorIsBold) {
   return failed ? null : built;
 }
 
-const BULLET_CHILDREN = '<a:buFont typeface="Arial" panose="020B0604020202020204" pitchFamily="34" charset="0"/><a:buChar char="•"/>';
+// buFontTx means "the bullet uses the paragraph's own text font". Naming a
+// typeface here — Arial, or anything else — injects a font the deck never had.
+const BULLET_CHILDREN = '<a:buFontTx/><a:buChar char="•"/>';
 // Children of <a:pPr> are schema-ordered; bullet properties must land before
 // any of these, or PowerPoint offers to "repair" the file.
 const PPR_TAIL_TAGS = /<a:tabLst\b|<a:defRPr\b|<a:extLst\b/;
@@ -328,6 +330,57 @@ export function rewriteParagraphXml(paragraphXml, lines) {
  * Analysis
  * ------------------------------------------------------------------ */
 
+/* Largest explicit font size in a paragraph, in hundredths of a point.
+ * 0 when every run inherits its size from the layout. */
+function maxRunSize(paragraphXml) {
+  let largest = 0;
+  for (const run of textRuns(paragraphXml)) {
+    const size = Number(readAttribute(runPropertiesXml(run.xml), "sz"));
+    if (Number.isFinite(size) && size > largest) largest = size;
+  }
+  return largest;
+}
+
+function shapeTop(elementXml) {
+  const offset = elementXml.match(/<a:off\b[^>]*>/)?.[0] || "";
+  const top = Number(readAttribute(offset, "y"));
+  return Number.isFinite(top) ? top : Number.POSITIVE_INFINITY;
+}
+
+// Roughly the top quarter of a standard 7.5in-tall slide, in EMU.
+const TOP_BAND_EMU = 1_700_000;
+const HEADER_MIN_SIZE = 2000; // 20pt
+const HEADER_MAX_WORDS = 14;
+
+/* Marks which elements are headings, so they can be left completely alone.
+ *
+ * PowerPoint only labels a shape as a title when it sits in a title
+ * placeholder. Decks exported from Google Slides — and any heading someone made
+ * by hand — are plain text boxes, which is why headings were being rewritten,
+ * split into bullets and emphasised like body copy. */
+function markHeaders(elements) {
+  const textual = elements.filter((element) => element.paragraphs.length);
+  const sizes = textual.map((element) => element.fontSize).filter((size) => size > 0);
+  const largest = sizes.length ? Math.max(...sizes) : 0;
+  const hasSmallerText = sizes.some((size) => size < largest);
+
+  for (const element of elements) {
+    const words = wordCount(element.text);
+    const namedHeader = /\b(title|header|heading|subtitle)\b/i.test(element.name);
+    const looksLikeHeading = element.paragraphs.length === 1
+      && words > 0
+      && words <= HEADER_MAX_WORDS
+      && element.fontSize >= HEADER_MIN_SIZE
+      // Biggest text on the slide, and something smaller exists to contrast with.
+      && element.fontSize === largest
+      && hasSmallerText
+      && element.top <= TOP_BAND_EMU;
+
+    element.isHeader = element.type === "title" || namedHeader || looksLikeHeading;
+  }
+  return elements;
+}
+
 function elementType(elementXml, kind) {
   if (kind === "pic") return "image";
   if (/<a:tbl\b/.test(elementXml)) return "table";
@@ -372,6 +425,8 @@ export function analyzeSlideXml(xml, slideNumber) {
       objectId,
       name,
       type: elementType(elementXml, found.kind),
+      fontSize: Math.max(0, ...paragraphMatches(elementXml).map((paragraph) => maxRunSize(paragraph.xml))),
+      top: shapeTop(elementXml),
       text: paragraphs.map((paragraph) => paragraph.text).join("\n"),
       paragraphs,
       relationshipId: readAttribute(blip, "r:embed") || readAttribute(blip, "r:link") || null,
@@ -379,10 +434,13 @@ export function analyzeSlideXml(xml, slideNumber) {
     });
   }
 
+  markHeaders(elements);
+
   return {
     slide: Number(slideNumber),
     elements,
     counts: {
+      headers: elements.filter((element) => element.isHeader && element.paragraphs.length).length,
       images: elements.filter((element) => element.type === "image").length,
       tables: elements.filter((element) => element.type === "table").length,
       charts: elements.filter((element) => element.type === "chart").length,
@@ -391,7 +449,7 @@ export function analyzeSlideXml(xml, slideNumber) {
         0,
       ),
       editableParagraphs: elements.reduce(
-        (sum, element) => sum + element.paragraphs.filter((paragraph) => paragraph.editable).length,
+        (sum, element) => sum + (element.isHeader ? 0 : element.paragraphs.filter((paragraph) => paragraph.editable).length),
         0,
       ),
       words: elements.reduce((sum, element) => sum + wordCount(element.text), 0),
@@ -413,6 +471,14 @@ export function buildManualNotes(slides) {
         slide: slide.slide,
         rule: 7,
         note: `${bulletCount} bullets here would read better revealed one at a time — set that up in PowerPoint's Animation pane.`,
+      });
+    }
+    for (const element of slide.elements) {
+      if (!element.isHeader || wordCount(element.text) <= 8) continue;
+      notes.push({
+        slide: slide.slide,
+        rule: 2,
+        note: `Heading left untouched: "${element.text}". It runs long — shorten it yourself if you want to.`,
       });
     }
     if (slide.counts.charts) {
@@ -480,6 +546,7 @@ export async function analyzePptx(arrayBuffer, onProgress, zipLibrary = globalTh
     slideRelationships: countMatching(names, /^ppt\/slides\/_rels\/slide\d+\.xml\.rels$/),
     notes: countMatching(names, /^ppt\/notesSlides\/notesSlide\d+\.xml$/),
     charts: countMatching(names, /^ppt\/charts\/chart\d+\.xml$/),
+    headers: slides.reduce((sum, slide) => sum + slide.counts.headers, 0),
     tables: slides.reduce((sum, slide) => sum + slide.counts.tables, 0),
     hyperlinks: slides.reduce((sum, slide) => sum + slide.counts.hyperlinks, 0),
     imagesReferenced: slides.reduce((sum, slide) => sum + slide.counts.images, 0),
@@ -504,7 +571,8 @@ export function createAnalysisSnapshot(analysis) {
     slides: analysis.slides.map((slide) => ({
       slide: slide.slide,
       elements: slide.elements
-        .filter((element) => element.paragraphs.some((paragraph) => paragraph.editable))
+        // Headings never leave the browser, so nothing can propose changing one.
+        .filter((element) => !element.isHeader && element.paragraphs.some((paragraph) => paragraph.editable))
         .map((element) => ({
           objectId: element.objectId,
           name: element.name.slice(0, 160),
