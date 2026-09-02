@@ -40,45 +40,6 @@ let currentReportUrl = "";
 let currentPptxUrl = "";
 let currentResult = null;
 
-function randomUsageId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  const bytes = new Uint8Array(16);
-  globalThis.crypto?.getRandomValues?.(bytes);
-  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("") || `${Date.now()}${Math.random()}`.replace(/\D/g, "").padEnd(16, "0");
-}
-
-function anonymousUsageId() {
-  const key = "lucid-slides-anonymous-usage-id";
-  try {
-    const existing = localStorage.getItem(key);
-    if (existing) return existing;
-    const created = randomUsageId();
-    localStorage.setItem(key, created);
-    return created;
-  } catch {
-    return randomUsageId();
-  }
-}
-
-async function recordSuccessfulConversion({ eventId, slidesProcessed, slidesChanged, changesApplied }) {
-  try {
-    await fetch("/api/usage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Lucid-Request": "usage-v1" },
-      body: JSON.stringify({
-        eventId,
-        anonymousId: anonymousUsageId(),
-        slidesProcessed,
-        slidesChanged,
-        changesApplied,
-      }),
-      keepalive: true,
-    });
-  } catch {
-    // Analytics must never interrupt presentation processing or downloading.
-  }
-}
-
 function resetPanels() {
   processingBox.style.display = "none";
   processingBox.replaceChildren();
@@ -263,6 +224,7 @@ async function requestSimplifications(analysis) {
     edits: validateAiProposals(snapshot, data.proposals),
     message: data.message || "",
     warnings: data.warnings || [],
+    coverage: data.coverage || null,
   };
 }
 
@@ -275,13 +237,12 @@ async function handleFile(file) {
   }
 
   try {
-    const conversionEventId = randomUsageId();
     logLine(`Reading ${file.name}…`);
     const arrayBuffer = await file.arrayBuffer();
     const analysis = await analyzePptx(arrayBuffer, logLine);
 
     logLine(`Simplifying ${analysis.inventory.editableParagraphs} lines across ${analysis.inventory.slides} slides…`);
-    const { edits, message, warnings } = await requestSimplifications(analysis);
+    const { edits, message, warnings, coverage } = await requestSimplifications(analysis);
 
     logLine(edits.length ? `Applying ${edits.length} changes…` : "Nothing needed changing.");
     const generation = await applyProposalsToPptx(arrayBuffer, edits);
@@ -297,21 +258,19 @@ async function handleFile(file) {
       pptxDownload.style.display = "inline-block";
       resultTitle.textContent = "Your simplified presentation is ready.";
       resultSummary.textContent = `${generation.appliedCount} line${generation.appliedCount === 1 ? " was" : "s were"} rewritten across ${analysis.inventory.slides} slides. Fonts, colours, images, charts and layout are unchanged, and your original file is untouched.`;
-      const slidesChanged = new Set(edits.filter((edit) => edit.applicationStatus === "applied").map((edit) => edit.slide)).size;
-      void recordSuccessfulConversion({
-        eventId: conversionEventId,
-        slidesProcessed: analysis.inventory.slides,
-        slidesChanged,
-        changesApplied: generation.appliedCount,
-      });
     } else {
       resultTitle.textContent = "Nothing was changed.";
       resultSummary.textContent = `${analysis.inventory.slides} slides and ${analysis.inventory.words.toLocaleString()} words were reviewed, but no line needed rewriting.`;
     }
 
     modeNotice.textContent = warnings.length ? `${message} ${warnings.join(" ")}` : message;
+    // A partial run used to look identical to a complete one. Say so plainly.
+    if (warnings.length) {
+      showError(`Some slides could not be simplified: ${warnings.join(" ")} Re-run the file to try those slides again.`);
+    }
     appendInventory("slides reviewed", analysis.inventory.slides);
     appendInventory("lines rewritten", generation.appliedCount);
+    if (coverage) appendInventory("lines eligible for rewriting", coverage.editableParagraphs);
     appendInventory("images preserved", analysis.inventory.media);
     appendInventory("charts preserved", analysis.inventory.charts);
     appendInventory("tables preserved", analysis.inventory.tables);
