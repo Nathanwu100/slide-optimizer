@@ -3,9 +3,20 @@ import { ruleGuidanceText } from "../lib/rules.js";
 
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 12;
+// 8 slides a batch keeps the request count — and therefore the bill — where it
+// was. A batch that truncates is halved and retried (analyzeBatchDeep), so a
+// lost batch no longer needs to be prevented by paying for small ones upfront.
 const SLIDES_PER_BATCH = 8;
 const MAX_CONCURRENT_BATCHES = 3;
 const MAX_OUTPUT_TOKENS = 16_000;
+// A line this short carries no filler worth cutting and no room for emphasis.
+const MIN_WORDS_TO_EDIT = 4;
+// The second pass costs extra requests, so it only runs when the first pass
+// actually left a meaningful number of lines behind — not for one stray line.
+const RETRY_WHEN_MISSING_ABOVE = 0.08;
+// Missing paragraphs are packed densely: only the skipped lines travel, so one
+// request usually covers the whole deck's leftovers.
+const SLIDES_PER_RETRY_BATCH = 40;
 const buckets = new Map();
 
 /* Tried in order. A model the account cannot reach falls through to the next
@@ -69,7 +80,7 @@ function responseOutputText(payload) {
     .join("");
 }
 
-function buildPrompt(batch) {
+function buildPrompt(batch, retry = false) {
   return [
     "You rewrite presentation slides so a reader with ADHD can take them in at a glance.",
     "",
@@ -81,8 +92,10 @@ function buildPrompt(batch) {
     "",
     "How to work:",
     "- Go through EVERY paragraph in the snapshot, slide by slide, in order.",
-    "- Return a proposal for every paragraph that is longer, denser, or more abstract than it needs to be. On a typical deck that is most of the body text, not one or two lines.",
-    "- Skip a paragraph only when it is already short, plain and concrete, and no emphasis would help.",
+    `- Return a proposal for EVERY paragraph of ${MIN_WORDS_TO_EDIT} words or more. Not most of them — all of them. A deck with 60 such paragraphs gets 60 proposals.`,
+    "- A paragraph whose wording is already tight still gets a proposal: return its text as one line, essentially unchanged, with its key phrase in `emphasize`. Coverage matters more than restraint.",
+    "- Short sub-bullets of the form 'Term: definition' count. Tighten the definition and emphasise the term.",
+    `- Only paragraphs of ${MIN_WORDS_TO_EDIT - 1} words or fewer may be left out.`,
     "",
     "GIVE THE TEXT STRUCTURE. Each proposal is a list of `lines`:",
     "- A dense paragraph that contains two, three or four separate points becomes two, three or four lines — one point each. They are written back into the slide as separate bullets. This is the preferred outcome for any body paragraph longer than about 15 words.",
@@ -101,7 +114,7 @@ function buildPrompt(batch) {
     "- `lines[].emphasize` lists 0-2 short phrases copied EXACTLY from that same line's `text` (not from the original). Each must appear exactly once in that line and together stay under half of it.",
     "- Emphasise on EVERY body line that has 4 or more words. Do this regardless of what colour or style the original text is — coloured, bold and heading-styled lines need it just as much. Leave `emphasize` empty only for titles and for lines of 3 words or fewer.",
     "- `rule` is the rule number that best explains the change. Never use 7 or 11.",
-    "- `explanation` is one short sentence, 12 words or fewer.",
+    "- `explanation` is a fragment of 8 words or fewer, e.g. 'cuts filler' or 'splits two ideas'. Never a full sentence.",
     "",
     "Writing style for every line:",
     "- Everyday words over jargon; active voice; concrete verbs.",
@@ -109,18 +122,20 @@ function buildPrompt(batch) {
     "- Turn full sentences into scannable phrases where that keeps the meaning.",
     "- Do not repeat words the slide title already says.",
     "",
-    "Return JSON matching the schema. Return an empty proposals array only if literally every paragraph is already short and plain.",
+    retry
+      ? "THIS IS A SECOND PASS. Every paragraph below was missed on the first pass. Return a proposal for each one — no exceptions, no empty array."
+      : "Return JSON matching the schema. An empty proposals array is almost always wrong.",
     "",
     "Presentation snapshot:",
     JSON.stringify(batch),
   ].join("\n");
 }
 
-async function callOpenAi(apiKey, model, batch) {
+async function callOpenAi(apiKey, model, batch, retry) {
   const request = {
     model,
     instructions: "You return only valid JSON matching the supplied schema.",
-    input: buildPrompt(batch),
+    input: buildPrompt(batch, retry),
     max_output_tokens: MAX_OUTPUT_TOKENS,
     store: false,
     text: {
@@ -153,13 +168,13 @@ function isModelProblem(status, payload) {
 }
 
 /* Runs one batch of slides, walking the model candidates until one answers.
- * Returns { proposals, error } — a failed batch never fails the whole deck. */
-async function analyzeBatch(apiKey, batch, state) {
+ * Returns { proposals, error, truncated } — a failed batch never fails the deck. */
+async function analyzeBatch(apiKey, batch, state, retry = false) {
   const candidates = state.model ? [state.model] : modelCandidates();
   let lastError = "The analysis service was unavailable.";
 
   for (const model of candidates) {
-    const { ok, status, payload } = await callOpenAi(apiKey, model, batch);
+    const { ok, status, payload } = await callOpenAi(apiKey, model, batch, retry);
 
     if (!ok) {
       if (isModelProblem(status, payload) && !state.model) {
@@ -176,26 +191,85 @@ async function analyzeBatch(apiKey, batch, state) {
 
     const text = responseOutputText(payload);
     if (!text) {
-      const reason = payload?.status === "incomplete"
-        ? `truncated (${payload?.incomplete_details?.reason || "length"})`
-        : "empty response";
-      return { proposals: [], error: `OpenAI returned no usable output: ${reason}.` };
+      const truncated = payload?.status === "incomplete";
+      const reason = truncated ? `truncated (${payload?.incomplete_details?.reason || "length"})` : "empty response";
+      return { proposals: [], error: `OpenAI returned no usable output: ${reason}.`, truncated };
     }
     try {
       return { proposals: JSON.parse(text)?.proposals || [], error: null };
     } catch {
-      return { proposals: [], error: "OpenAI returned malformed JSON." };
+      // A cut-off JSON body is a truncation in disguise.
+      return { proposals: [], error: "OpenAI returned malformed JSON.", truncated: true };
     }
   }
   return { proposals: [], error: lastError };
 }
 
-function chunkSlides(snapshot) {
+/* A batch whose answer did not fit is halved and retried rather than dropped.
+ * Losing a whole batch is what left entire stretches of a deck untouched. */
+async function analyzeBatchDeep(apiKey, batch, state, retry = false) {
+  const outcome = await analyzeBatch(apiKey, batch, state, retry);
+  if (!outcome.truncated || batch.slides.length < 2) return outcome;
+
+  const middle = Math.ceil(batch.slides.length / 2);
+  const halves = [
+    { slides: batch.slides.slice(0, middle) },
+    { slides: batch.slides.slice(middle) },
+  ];
+  const results = [];
+  for (const half of halves) results.push(await analyzeBatchDeep(apiKey, half, state, retry));
+  const proposals = results.flatMap((result) => result.proposals);
+  const errors = results.map((result) => result.error).filter(Boolean);
+  return { proposals, error: proposals.length ? null : errors[0] || outcome.error };
+}
+
+function chunkSlides(slides, size) {
   const batches = [];
-  for (let index = 0; index < snapshot.slides.length; index += SLIDES_PER_BATCH) {
-    batches.push({ slides: snapshot.slides.slice(index, index + SLIDES_PER_BATCH) });
+  for (let index = 0; index < slides.length; index += size) {
+    batches.push({ slides: slides.slice(index, index + size) });
   }
   return batches;
+}
+
+function paragraphKey(slide, objectId, text) {
+  return `${slide} ${objectId} ${text}`;
+}
+
+function countEditableParagraphs(snapshot) {
+  let total = 0;
+  for (const slide of snapshot.slides) {
+    for (const element of slide.elements) {
+      for (const paragraph of element.paragraphs) {
+        if (paragraph.text.trim().split(/\s+/).length >= MIN_WORDS_TO_EDIT) total += 1;
+      }
+    }
+  }
+  return total;
+}
+
+/* Rebuilds a snapshot containing only the paragraphs no proposal came back for,
+ * so the second pass sees a short, unambiguous list instead of the whole deck. */
+function snapshotOfMissing(snapshot, covered) {
+  const slides = [];
+  for (const slide of snapshot.slides) {
+    const elements = [];
+    for (const element of slide.elements) {
+      const paragraphs = element.paragraphs.filter((paragraph) =>
+        paragraph.text.trim().split(/\s+/).length >= MIN_WORDS_TO_EDIT
+        && !covered.has(paragraphKey(slide.slide, element.objectId, paragraph.text)));
+      if (paragraphs.length) {
+        elements.push({
+          objectId: element.objectId,
+          name: element.name,
+          type: element.type,
+          text: paragraphs.map((paragraph) => paragraph.text).join("\n"),
+          paragraphs,
+        });
+      }
+    }
+    if (elements.length) slides.push({ slide: slide.slide, elements });
+  }
+  return slides;
 }
 
 async function runWithConcurrency(items, limit, worker) {
@@ -239,11 +313,15 @@ export default async function handler(request, response) {
   }
 
   try {
-    const batches = chunkSlides(snapshot);
     const state = { model: null };
-    const outcomes = await runWithConcurrency(batches, MAX_CONCURRENT_BATCHES, (batch) => analyzeBatch(apiKey, batch, state));
+    const batches = chunkSlides(snapshot.slides, SLIDES_PER_BATCH);
+    const outcomes = await runWithConcurrency(
+      batches,
+      MAX_CONCURRENT_BATCHES,
+      (batch) => analyzeBatchDeep(apiKey, batch, state),
+    );
 
-    const rawProposals = outcomes.flatMap((outcome) => outcome.proposals);
+    let rawProposals = outcomes.flatMap((outcome) => outcome.proposals);
     const errors = [...new Set(outcomes.map((outcome) => outcome.error).filter(Boolean))];
 
     // Every batch failed and nothing came back — surface the real reason.
@@ -251,16 +329,41 @@ export default async function handler(request, response) {
       return response.status(502).json({ error: errors[0], proposals: [] });
     }
 
+    // Second pass: anything the first pass walked past gets asked for again, on
+    // its own, with an instruction that leaves no room to skip it. Without this,
+    // a model that decides a line is "already fine" leaves it untouched forever.
+    const covered = new Set(rawProposals.map((proposal) =>
+      paragraphKey(Number(proposal.slide), String(proposal.objectId || ""), String(proposal.originalText || ""))));
+    const editable = countEditableParagraphs(snapshot);
+    const missingSlides = snapshotOfMissing(snapshot, covered);
+    const missingCount = missingSlides.reduce(
+      (sum, slide) => sum + slide.elements.reduce((count, element) => count + element.paragraphs.length, 0),
+      0,
+    );
+    // Only worth another request when a real chunk of the deck was skipped.
+    if (missingCount && editable && missingCount / editable > RETRY_WHEN_MISSING_ABOVE) {
+      const retryBatches = chunkSlides(missingSlides, SLIDES_PER_RETRY_BATCH);
+      const retryOutcomes = await runWithConcurrency(
+        retryBatches,
+        MAX_CONCURRENT_BATCHES,
+        (batch) => analyzeBatchDeep(apiKey, batch, state, true),
+      );
+      rawProposals = rawProposals.concat(retryOutcomes.flatMap((outcome) => outcome.proposals));
+    }
+
     const proposals = validateProposalResponse(snapshot, { proposals: rawProposals });
-    const partial = errors.length ? ` ${errors.length} of ${batches.length} slide batches could not be analysed.` : "";
+    const uncovered = Math.max(0, editable - proposals.length);
+    const partial = errors.length ? ` ${errors.length} of ${batches.length} slide batches failed.` : "";
+    const gap = uncovered ? ` ${uncovered} line${uncovered === 1 ? "" : "s"} were left as they were.` : "";
 
     return response.status(200).json({
       mode: "auto-simplify",
       model: state.model,
       proposals,
+      coverage: { editableParagraphs: editable, simplified: proposals.length },
       message: proposals.length
-        ? `${proposals.length} slide line${proposals.length === 1 ? "" : "s"} simplified.${partial}`
-        : `No lines needed simplifying.${partial}`,
+        ? `${proposals.length} of ${editable} slide lines simplified.${gap}${partial}`
+        : `No lines could be simplified.${partial}`,
       warnings: errors,
     });
   } catch (error) {
