@@ -5,6 +5,7 @@ import {
   validateAiProposals,
 } from "./simplify-engine.js";
 import { RULE_TITLES } from "./lib/rules.js";
+import { buildMissedDetailsPdf } from "./lib/pdf.js";
 
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("fileInput");
@@ -18,6 +19,7 @@ const inventoryList = document.getElementById("inventoryList");
 const proposalContainer = document.getElementById("proposalContainer");
 const pptxDownload = document.getElementById("pptxDownload");
 const reportDownload = document.getElementById("reportDownload");
+const detailsPdfDownload = document.getElementById("detailsPdfDownload");
 
 for (const [id, element] of Object.entries({
   dropzone,
@@ -32,6 +34,7 @@ for (const [id, element] of Object.entries({
   proposalContainer,
   pptxDownload,
   reportDownload,
+  detailsPdfDownload,
 })) {
   if (!element) console.error(`SimplifyYourSlides: #${id} is missing. The page and application files may not match.`);
 }
@@ -51,6 +54,7 @@ function track(name, data = {}) {
 
 let currentReportUrl = "";
 let currentPptxUrl = "";
+let currentDetailsPdfUrl = "";
 let currentResult = null;
 
 function resetPanels() {
@@ -65,6 +69,8 @@ function resetPanels() {
   currentReportUrl = "";
   if (currentPptxUrl) URL.revokeObjectURL(currentPptxUrl);
   currentPptxUrl = "";
+  if (currentDetailsPdfUrl) URL.revokeObjectURL(currentDetailsPdfUrl);
+  currentDetailsPdfUrl = "";
   pptxDownload.removeAttribute("href");
   pptxDownload.style.display = "none";
   currentResult = null;
@@ -224,6 +230,33 @@ function updateReportDownload() {
   reportDownload.download = `${currentResult.fileName.replace(/\.pptx$/i, "")} — SimplifyYourSlides summary.json`;
 }
 
+/* Every rewritten line, in full, so nothing a simplification pass dropped is
+ * actually lost — see lib/pdf.js for why this overcompensates on purpose. */
+function updateDetailsPdfDownload() {
+  if (!currentResult) return;
+  const entries = currentResult.items
+    .filter((item) => item.applicationStatus === "applied")
+    .map((item) => ({
+      slide: item.slide,
+      elementName: item.elementName || `Element ${item.objectId}`,
+      rule: item.rule,
+      ruleTitle: item.ruleTitle || RULE_TITLES[item.rule] || "",
+      originalText: item.originalText,
+      simplifiedText: item.proposedText,
+    }))
+    .sort((a, b) => a.slide - b.slide);
+
+  const pdfBytes = buildMissedDetailsPdf(entries, {
+    fileName: currentResult.fileName,
+    generatedAt: new Date().toISOString(),
+  });
+
+  if (currentDetailsPdfUrl) URL.revokeObjectURL(currentDetailsPdfUrl);
+  currentDetailsPdfUrl = URL.createObjectURL(new Blob([pdfBytes], { type: "application/pdf" }));
+  detailsPdfDownload.href = currentDetailsPdfUrl;
+  detailsPdfDownload.download = `${currentResult.fileName.replace(/\.pptx$/i, "")} — possibly missed details.pdf`;
+}
+
 async function requestSimplifications(analysis) {
   const snapshot = createAnalysisSnapshot(analysis);
   const response = await fetch("/api/analyze", {
@@ -309,6 +342,7 @@ async function handleFile(file) {
 
     renderChanges(edits, analysis.manualNotes);
     updateReportDownload();
+    updateDetailsPdfDownload();
 
     processingBox.style.display = "none";
     resultBox.style.display = "block";
