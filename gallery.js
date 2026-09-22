@@ -52,7 +52,7 @@ if (layers.length === 2 && toggle) {
     toggle.setAttribute('aria-label', paused ? 'Play background slideshow' : 'Pause background slideshow');
     if (!paused && !document.hidden) {
       void preload((current + 1) % photos.length);
-      timer = setInterval(advance, 3000);
+      timer = setInterval(advance, 5000);
     }
   }
 
