@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 5173;
 
 const MIME = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
-  ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml",
+  ".jpg": "image/jpeg", ".json": "application/json", ".png": "image/png", ".svg": "image/svg+xml",
 };
 
 function makeResponseShim(res) {
